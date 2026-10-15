@@ -13,9 +13,18 @@ const csvPath = process.argv[2] || path.join(__dirname, '..', 'tests', 'fixtures
 const port = Number(process.argv[3] || 8787);
 const src = path.join(__dirname, '..', 'src');
 
-const gas = loadGas({ email: 'preview@example.com' });
+// PREVIEW_SLACK=1 pretends Slack is configured (messages are captured, not sent).
+const gas = loadGas({ email: 'preview@example.com', props: process.env.PREVIEW_SLACK
+  ? { SLACK_WEBHOOK_URL: 'https://hooks.slack.com/preview', SLACK_BOT_TOKEN: 'xoxb-preview' } : {} });
 gas.ctx.setup();
 gas.ctx.importCsv(fs.readFileSync(csvPath, 'utf8'), 'Preview');
+if (process.env.PREVIEW_SLACK) {
+  const lists = gas.ss.getSheetByName('Lists');
+  const head = lists.dump()[0];
+  for (let r = 2; r <= lists.getLastRow(); r++) {
+    if (lists.get(r, head.indexOf('Handler') + 1)) lists.set(r, head.indexOf('Handler Slack ID') + 1, 'U' + r);
+  }
+}
 
 const shim = `<script>
 window.google = { script: {
@@ -50,7 +59,7 @@ http.createServer((req, res) => {
       const fn = req.url.slice(5);
       let out;
       try {
-        if (!/^(getBootstrap|updateItem|addItem|importCsv|getItemDetail|addNote)$/.test(fn)) throw new Error('Not exposed: ' + fn);
+        if (!/^(getBootstrap|updateItem|addItem|importCsv|getItemDetail|addNote|setReviewPoints)$/.test(fn)) throw new Error('Not exposed: ' + fn);
         out = { result: JSON.parse(JSON.stringify(gas.ctx[fn](...JSON.parse(body)))) };
       } catch (e) { out = { error: e.message }; }
       res.writeHead(200, { 'Content-Type': 'application/json' });

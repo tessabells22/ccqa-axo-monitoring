@@ -97,6 +97,7 @@ function loadGas(opts = {}) {
   const ss = new FakeSpreadsheet();
   const props = Object.assign({}, opts.props || {});
   const slackPosts = [];
+  const slackDms = [];
   const ctx = {
     console,
     SpreadsheetApp: {
@@ -109,7 +110,15 @@ function loadGas(opts = {}) {
       getProperty: (k) => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = String(v); } }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     Utilities: { formatDate, getUuid: () => crypto.randomUUID() },
-    UrlFetchApp: { fetch: (url, o) => { slackPosts.push(JSON.parse(o.payload)); return { getResponseCode: () => 200, getContentText: () => 'ok' }; } },
+    UrlFetchApp: { fetch: (url, o) => {
+      const body = JSON.parse(o.payload);
+      if (url.indexOf('chat.postMessage') >= 0) {
+        slackDms.push(Object.assign({ auth: o.headers.Authorization }, body));
+        return { getResponseCode: () => 200, getContentText: () => JSON.stringify(opts.dmFails ? { ok: false, error: 'channel_not_found' } : { ok: true }) };
+      }
+      slackPosts.push(body);
+      return { getResponseCode: () => 200, getContentText: () => 'ok' };
+    } },
     ScriptApp: { getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/fake/exec' }),
       getProjectTriggers: () => [], WeekDay: {}, newTrigger: () => chain() },
     HtmlService: {}
@@ -117,7 +126,7 @@ function loadGas(opts = {}) {
   vm.createContext(ctx);
   const src = path.join(__dirname, '..', 'src');
   ['Mapping.gs', 'Code.gs', 'Slack.gs'].forEach((f) => vm.runInContext(fs.readFileSync(path.join(src, f), 'utf8'), ctx, { filename: f }));
-  return { ctx, ss, props, slackPosts };
+  return { ctx, ss, props, slackPosts, slackDms };
 }
 
 module.exports = { loadGas };

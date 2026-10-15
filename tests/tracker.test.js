@@ -118,7 +118,7 @@ test('addItem appends below existing rows, not below the checkbox column', () =>
   assert.throws(() => ctx.addItem({ id: 'abc', name: 'x' }, 'x'), /must be a number/);
   const sh = ss.getSheetByName('Items');
   assert.strictEqual(sh.get(7, 1), '30001');
-  assert.strictEqual(sh.get(7, 10), 'ERPIS');
+  assert.strictEqual(sh.get(7, sh.dump()[0].indexOf('AXO Category') + 1), 'ERPIS');
   ctx.importCsv(CSV, 'x');
   assert.strictEqual(ctx.getBootstrap().items.length, 6);
 });
@@ -152,4 +152,77 @@ test('Slack is silent without a webhook', () => {
   ctx.importCsv(CSV, 'x');
   ctx.updateItem('20001', { status: 'Done' }, 'x');
   assert.strictEqual(slackPosts.length, 0);
+});
+
+test('quarters: helpers, import tagging, validation', () => {
+  assert.strictEqual(M.quarterLabel(2026, 1), 'Q1 2026');
+  assert.strictEqual(M.quarterLabel('2026', '12'), 'Q4 2026');
+  assert.ok(M.isQuarter('Q3 2026') && !M.isQuarter('Q5 2026') && !M.isQuarter('2026 Q3'));
+  const { ctx } = fresh();
+  assert.throws(() => ctx.importCsv(CSV, 'x', 'Q9 2026'), /Quarter must look like/);
+  ctx.importCsv(CSV, 'x', 'Q3 2026');
+  const boot = ctx.getBootstrap();
+  assert.match(boot.currentQuarter, /^Q[1-4] \d{4}$/);
+  assert.ok(boot.items.every((i) => i.quarter === 'Q3 2026'));
+  ctx.importCsv(CSV, 'x', 'Q4 2026');
+  assert.ok(ctx.getBootstrap().items.every((i) => i.quarter === 'Q3 2026'), 're-import keeps the original quarter');
+  assert.strictEqual(ctx.updateItem('20001', { quarter: 'Q4 2026' }, 'x').quarter, 'Q4 2026');
+  assert.throws(() => ctx.updateItem('20001', { quarter: 'Q4' }, 'x'), /Quarter must look like/);
+  assert.strictEqual(ctx.addItem({ id: '30002', name: 'x' }, 'x').quarter, boot.currentQuarter);
+});
+
+test('BA column comes from Reported By', () => {
+  const { ctx, ss } = fresh();
+  ctx.importCsv(CSV, 'x');
+  const header = ss.getSheetByName('Items').dump()[0];
+  assert.ok(header.includes('BA') && !header.includes('Reported By'));
+  assert.strictEqual(ctx.getBootstrap().items.find((i) => i.id === '20001').reportedBy, 'Reporter A');
+});
+
+function setSlackId(ss, handler, id) {
+  const lists = ss.getSheetByName('Lists');
+  const head = lists.dump()[0];
+  const h = head.indexOf('Handler') + 1, sid = head.indexOf('Handler Slack ID') + 1;
+  for (let r = 2; r <= lists.getLastRow(); r++) if (lists.get(r, h) === handler) lists.set(r, sid, id);
+}
+
+test('review points: status, note and DM to the handler', () => {
+  const { ctx, ss, slackPosts, slackDms } = fresh({ props: { SLACK_WEBHOOK_URL: 'https://hooks/x', SLACK_BOT_TOKEN: 'xoxb-1' } });
+  ctx.importCsv(CSV, 'x');
+  setSlackId(ss, 'Ley - QA', 'U0LEY');
+  ctx.updateItem('20002', { handler: 'Ley - QA', status: 'Ongoing QA' }, 'Ley - QA');
+  const before = slackPosts.length;
+  assert.throws(() => ctx.setReviewPoints('20002', '', 'Carla - QA'), /Write a note/);
+  assert.throws(() => ctx.setReviewPoints('20002', 'x', ''), /Pick your name/);
+  assert.throws(() => ctx.addNote('20002', 'Review Points', 'x', 'y'), /review points form/);
+
+  const res = ctx.setReviewPoints('20002', '1. TC3 screenshot missing\n2. Wrong system', 'Carla - QA');
+  assert.strictEqual(res.item.status, 'Review Points');
+  assert.strictEqual(res.note.kind, 'Review Points');
+  assert.strictEqual(res.slack.via, 'dm');
+  assert.strictEqual(slackDms.length, 1);
+  assert.strictEqual(slackDms[0].channel, 'U0LEY');
+  assert.strictEqual(slackDms[0].auth, 'Bearer xoxb-1');
+  assert.match(slackDms[0].blocks[0].text.text, /TC3 screenshot missing\n>2\. Wrong system/);
+  assert.match(slackDms[0].blocks[1].elements[0].text, /From Carla - QA/);
+  assert.strictEqual(slackPosts.length, before, 'no duplicate channel ping for Review Points');
+  assert.strictEqual(ctx.getItemDetail('20002').notes[0].kind, 'Review Points');
+
+  // Already in Review Points: more points still DM, status unchanged
+  assert.strictEqual(ctx.setReviewPoints('20002', 'one more', 'Carla - QA').slack.via, 'dm');
+});
+
+test('review points fall back to a channel @mention without a token or Slack ID', () => {
+  const { ctx, ss, slackPosts, slackDms } = fresh({ props: { SLACK_WEBHOOK_URL: 'https://hooks/x' } });
+  ctx.importCsv(CSV, 'x');
+  setSlackId(ss, 'Ley - QA', 'U0LEY');
+  ctx.updateItem('20002', { handler: 'Ley - QA' }, 'x');
+  const r = ctx.setReviewPoints('20002', 'fix it', 'Carla - QA');
+  assert.deepStrictEqual([r.slack.via, r.slack.reason], ['channel', 'no bot token']);
+  assert.strictEqual(slackDms.length, 0);
+  assert.match(slackPosts[slackPosts.length - 1].blocks[0].text.text, /For <@U0LEY>/);
+
+  const g2 = fresh();
+  g2.ctx.importCsv(CSV, 'x');
+  assert.strictEqual(g2.ctx.setReviewPoints('20001', 'x', 'Carla - QA').slack.via, 'none');
 });

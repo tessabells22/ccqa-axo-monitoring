@@ -95,7 +95,7 @@ function formatItems_(sh) {
   sh.setFrozenColumns(1);
 
   var widths = { id: 70, itemType: 90, name: 520, workflowStep: 170, priority: 75, developer: 170, reportedBy: 170,
-    releaseNotes: 260, highPriority: 95, axoCategory: 100, system: 100, handler: 120, status: 130,
+    releaseNotes: 260, quarter: 90, highPriority: 95, axoCategory: 100, system: 100, handler: 120, status: 130,
     completedOn: 120, commentDev: 420, commentSed: 300, updatedBy: 150, updatedAt: 150, lastImported: 150, inLatestImport: 110 };
   Object.keys(widths).forEach(function (k) { sh.setColumnWidth(col[k] + 1, widths[k]); });
 
@@ -118,6 +118,9 @@ function formatItems_(sh) {
   body('status').setDataValidation(SpreadsheetApp.newDataValidation()
     .requireValueInList(STATUSES.map(function (s) { return s.name; }), true).setAllowInvalid(false).build())
     .setFontWeight('bold');
+  body('quarter').setDataValidation(SpreadsheetApp.newDataValidation()
+    .requireFormulaSatisfied('=OR(ISBLANK(' + colLetter_(col.quarter + 1) + '2),REGEXMATCH(' + colLetter_(col.quarter + 1) + '2,"^Q[1-4] [0-9]{4}$"))')
+    .setAllowInvalid(false).setHelpText('Use the form Q4 2026').build());
   body('completedOn').setNumberFormat('yyyy-mm-dd');
   body('updatedAt').setNumberFormat('yyyy-mm-dd hh:mm');
   body('lastImported').setNumberFormat('yyyy-mm-dd hh:mm');
@@ -144,6 +147,17 @@ function colIndex_() {
   var out = {};
   ITEM_COLUMNS.forEach(function (c, i) { out[c.key] = i; });
   return out;
+}
+
+function colLetter_(n) {
+  var s = '';
+  for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s;
+  return s;
+}
+
+function currentQuarter_() {
+  var now = new Date();
+  return quarterLabel(Utilities.formatDate(now, TZ, 'yyyy'), Utilities.formatDate(now, TZ, 'MM'));
 }
 
 /** First row below the last non-empty ID. */
@@ -183,7 +197,7 @@ function rowToItem_(row) {
   item.completedOn = fmtDate_(item.completedOn, 'yyyy-MM-dd');
   item.updatedAt = fmtDate_(item.updatedAt, "yyyy-MM-dd'T'HH:mm:ss");
   item.lastImported = fmtDate_(item.lastImported, "yyyy-MM-dd'T'HH:mm:ss");
-  ['itemType', 'name', 'workflowStep', 'priority', 'developer', 'reportedBy', 'releaseNotes', 'axoCategory',
+  ['itemType', 'name', 'workflowStep', 'priority', 'developer', 'reportedBy', 'releaseNotes', 'quarter', 'axoCategory',
    'system', 'handler', 'status', 'commentDev', 'commentSed', 'updatedBy'].forEach(function (k) {
     item[k] = item[k] == null ? '' : String(item[k]);
   });
@@ -266,8 +280,11 @@ function getBootstrap() {
       categories: lists['AXO Category'] || DEFAULT_LISTS['AXO Category'],
       systems: lists['System'] || DEFAULT_LISTS['System'],
       handlers: lists['Handler'] || DEFAULT_LISTS['Handler'],
-      noteKinds: lists['Note Kind'] || DEFAULT_LISTS['Note Kind']
+      noteKinds: lists['Note Kind'] || DEFAULT_LISTS['Note Kind'],
+      slackHandlers: Object.keys(lists.slackIds || {})
     },
+    currentQuarter: currentQuarter_(),
+    slackDm: !!props.getProperty('SLACK_BOT_TOKEN'),
     statuses: STATUSES,
     email: email,
     lastImport: props.getProperty('LAST_IMPORT') || '',
@@ -297,6 +314,7 @@ function updateItem(id, patch, actorName) {
       else if (k === 'completedOn') v = v ? parseDay_(v) : '';
       else v = String(v == null ? '' : v).trim();
       if (k === 'status' && v && !STATUSES.some(function (s) { return s.name === v; })) throw new Error('Unknown status "' + v + '".');
+      if (k === 'quarter' && v && !isQuarter(v)) throw new Error('Quarter must look like Q4 2026.');
       changes[k] = v;
     });
 
@@ -344,7 +362,7 @@ function addItem(item, actorName) {
     var rec = {
       id: id, itemType: mapItemType(item.itemType || 'Bug'), name: String(item.name).trim(),
       workflowStep: item.workflowStep || '', priority: item.priority || '', developer: item.developer || '',
-      reportedBy: item.reportedBy || '', releaseNotes: '',
+      reportedBy: item.reportedBy || '', releaseNotes: '', quarter: isQuarter(item.quarter) ? item.quarter : currentQuarter_(),
       highPriority: item.highPriority === true, axoCategory: item.axoCategory || deriveCategory(item.name),
       system: item.system || '', handler: item.handler || '', status: item.status || '',
       completedOn: '', commentDev: '', commentSed: '', updatedBy: who, updatedAt: now, lastImported: '', inLatestImport: false
@@ -362,8 +380,10 @@ function addItem(item, actorName) {
  * Upserts an AXO items CSV export. CSV columns are refreshed on existing rows;
  * QA columns (status, handler, comments, ...) are never touched.
  */
-function importCsv(csvText, actorName) {
+function importCsv(csvText, actorName, quarter) {
   var incoming = csvToItems(parseCsv(csvText));
+  if (quarter && !isQuarter(quarter)) throw new Error('Quarter must look like Q4 2026.');
+  quarter = quarter || currentQuarter_();
   if (!incoming.length) throw new Error('No items found in the file.');
   return withLock_(function () {
     var data = readItems_();
@@ -386,6 +406,7 @@ function importCsv(csvText, actorName) {
           switch (c.key) {
             case 'highPriority': return it.priority === 'High';
             case 'axoCategory': return deriveCategory(it.name);
+            case 'quarter': return quarter;
             case 'lastImported': return now;
             case 'inLatestImport': return true;
             case 'updatedBy': return who;
@@ -430,7 +451,7 @@ function importCsv(csvText, actorName) {
     log.push([now, who, '', 'Import', '', added.length + ' added, ' + updated + ' updated, ' + unchanged + ' unchanged, ' + dropped + ' no longer in export']);
     logActivity_(log);
 
-    var summary = { added: added.length, updated: updated, unchanged: unchanged, dropped: dropped,
+    var summary = { quarter: quarter, added: added.length, updated: updated, unchanged: unchanged, dropped: dropped,
       newHighPriority: added.filter(function (r) { return r[col.highPriority] === true; })
         .map(function (r) { return { id: String(r[0]), name: r[col.name] }; }) };
     PropertiesService.getScriptProperties().setProperty('LAST_IMPORT',
@@ -466,16 +487,40 @@ function noteToObj_(r) {
 }
 
 function addNote(id, kind, text, actorName) {
-  text = String(text || '').trim();
-  if (!text) throw new Error('Write a note first.');
-  if (text.length > 5000) throw new Error('Notes are limited to 5,000 characters.');
+  if (kind === REVIEW_KIND) throw new Error('Use the review points form to send review points.');
   return withLock_(function () {
     var hit = findRow_(id);
     if (!hit) throw new Error('AXO ' + id + ' is no longer in the tracker.');
-    var row = [Utilities.getUuid(), String(id), String(kind || 'General'), text, actor_(actorName), new Date()];
-    sheet_(SHEETS.notes).appendRow(row);
-    var note = noteToObj_(row);
+    var note = appendNote_(id, kind || 'General', text, actorName);
     try { onNoteAdded_(rowToItem_(hit.values), note, actorName); } catch (e) { console.warn('Slack notify failed: ' + e); }
     return note;
   });
+}
+
+var REVIEW_KIND = 'Review Points';
+
+function appendNote_(id, kind, text, actorName) {
+  text = String(text || '').trim();
+  if (!text) throw new Error('Write a note first.');
+  if (text.length > 5000) throw new Error('Notes are limited to 5,000 characters.');
+  var row = [Utilities.getUuid(), String(id), String(kind), text, actor_(actorName), new Date()];
+  sheet_(SHEETS.notes).appendRow(row);
+  return noteToObj_(row);
+}
+
+/**
+ * A reviewer (another QA) records review points: the status moves to Review Points,
+ * the points are saved as a note, and the handler gets them as a Slack DM.
+ */
+function setReviewPoints(id, text, reviewerName) {
+  if (!String(reviewerName || '').trim()) throw new Error('Pick your name in the top bar so the handler knows who reviewed.');
+  var note = withLock_(function () {
+    if (!findRow_(id)) throw new Error('AXO ' + id + ' is no longer in the tracker.');
+    return appendNote_(id, REVIEW_KIND, text, reviewerName);
+  });
+  // updateItem takes the lock itself; its channel ping skips Review Points (the DM covers it).
+  var item = updateItem(id, { status: REVIEW_KIND }, reviewerName);
+  var slack;
+  try { slack = sendReviewPoints_(item, note, reviewerName); } catch (e) { slack = { via: 'none', reason: String(e.message || e) }; }
+  return { item: item, note: note, slack: slack };
 }

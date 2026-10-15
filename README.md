@@ -4,7 +4,10 @@ Web app for the Carrier Compliance QA team to track AXO items, built the same wa
 
 - **Import** the AXO items CSV export. New AXOs are added, existing ones get their AXO fields refreshed. QA fields (status, handler, system, comments, notes) are never overwritten.
 - **Item Type** is mapped on import: `defects` → **Bug**, `features` → **User Story**.
-- **Track** each item with the columns from the AXO Monitoring 2026 workbook: High Priority, AXO Category, System, Handler, Status, Date of Completion, Comment/Note (DEV), Comment/Note (SED). Status colours match the workbook.
+- **Track** each item with the columns from the AXO Monitoring 2026 workbook: High Priority, AXO Category, System, Handler, Status, Date of Completion, Comment/Note (DEV), Comment/Note (SED). Status colours match the workbook, except Done, which is slate so it can't be confused with Ongoing BA/DEV.
+- **Quarters**: every AXO is tagged with a quarter (Q1–Q4 plus year). Tabs at the top scope the counts, chart and table to one quarter.
+- **Dev and BA** are shown under every item name. BA is the AXO export's "Reported By" column.
+- **Review points**: setting an item to Review Points opens a box for the reviewing QA to write the points. They're saved on the item and sent to the handler as a Slack DM.
 - **Notes**: every item has a timestamped, signed notes thread (General, DEV, SED, Blocker) plus a change history.
 - **Slack**: optional channel pings for key status changes, blocker notes, imports and a weekday digest.
 
@@ -12,9 +15,13 @@ Web app for the Carrier Compliance QA team to track AXO items, built the same wa
 
 | From the AXO CSV (refreshed on import) | QA tracking (owned by the team) |
 | --- | --- |
-| ID, Item Type, Name, Workflow Step, Priority, Developer, Reported By, Release Notes Description | High Priority, AXO Category, System, Handler, Status, Date of Completion, Comment/Note (DEV), Comment/Note (SED) |
+| ID, Item Type, Name, Workflow Step, Priority, Developer, BA (from Reported By), Release Notes Description | Quarter, High Priority, AXO Category, System, Handler, Status, Date of Completion, Comment/Note (DEV), Comment/Note (SED) |
 
 The CSV has two `Developer` columns (the first is filled for defects, the second for features); they are merged into one. AXO Category is set from the name prefix on first import (`ERPIS…` → ERPIS, `SERPC…`/`SERPCAR…` → SERPCAR) and can be changed. High Priority starts ticked when the AXO priority is High.
+
+**Quarter** is set when an AXO first arrives: the import dialog asks which quarter to tag new AXOs with (defaults to the quarter you're viewing, or the current one). Re-imports never change it. To carry an unfinished AXO into the next quarter, change its Quarter in the item panel.
+
+**Review points**: choosing Review Points (in the table or the item panel) opens a form instead of saving straight away. The reviewer picks their name and writes the points; sending sets the status, saves the points as a "Review Points" note, and DMs the handler. Cancel leaves the status as it was. While an item is in Review Points, the panel has an *Add review points* button for follow-up rounds.
 
 Status groups follow the workbook's Data Monitoring tab: **In Progress** = Ongoing QA, Ongoing BA/DEV, Awaiting BA/DEV, For Review, Review Points; **Completed** = Done, For Upload; **Discarded** = Moved, Withdraw; blank = **Not Started**. Setting a Completed status stamps today's date if no completion date is set.
 
@@ -65,14 +72,16 @@ Back it up anyway: in the Sheet, **File → Version history** is automatic. For 
 3. In Apps Script: **Project Settings → Script properties → Add**:
    - `SLACK_WEBHOOK_URL` = the webhook URL
    - `APP_URL` = the web app `/exec` URL (so messages link straight to the item)
+   - `SLACK_BOT_TOKEN` = the app's **Bot User OAuth Token** (`xoxb-…`), needed for review-point DMs. In the same Slack app: **OAuth & Permissions → Bot Token Scopes → add `chat:write`**, then **Install to Workspace**. Also turn on **App Home → Messages Tab** so people can see the DMs.
 4. Run `testSlack`, then `installTriggers` for the digest.
-5. Optional: in the **Lists** tab, put each handler's Slack member ID (Slack profile → ⋯ → *Copy member ID*) in the **Handler Slack ID** column on the same row. Pings then @mention the handler.
+5. In the **Lists** tab, put each handler's Slack member ID (Slack profile → ⋯ → *Copy member ID*) in the **Handler Slack ID** column on the same row. Review points need this to DM the handler; channel pings use it to @mention them.
 
 ### What gets posted
 
 | Event | Why |
 | --- | --- |
-| Status changes to **Awaiting BA/DEV**, **For Review**, **Review Points** or **Done** | These are the hand-offs someone else needs to act on. Change the list with the `SLACK_NOTIFY_STATUSES` property (comma-separated). |
+| Status changes to **Awaiting BA/DEV**, **For Review** or **Done** | These are the hand-offs someone else needs to act on. Change the list with the `SLACK_NOTIFY_STATUSES` property (comma-separated). |
+| **Review points** sent | DM to the handler with the points and the reviewer's name. If the handler has no Slack ID or there's no bot token, it posts to the channel with an @mention instead, and the app says so. |
 | An item is flagged High Priority, or a handler is assigned | Assignee gets @mentioned. |
 | A **Blocker** note is added | Blockers shouldn't wait for someone to open the tracker. Other note types stay in the tracker. |
 | An import adds new items | Lists any new high-priority AXOs. |
@@ -83,7 +92,7 @@ Ongoing QA and minor edits are deliberately quiet: a channel that pings on every
 ### Later, if you want more
 
 - **Two-way Slack** (mark Done from a Slack button, `/axo 13715` lookups): needs a Slack app with interactivity pointing at the web app. Apps Script can receive it via `doPost`, but Slack's 3-second response limit makes this flaky on Apps Script; this is the point where a small Cloud Run service earns its keep.
-- **Per-person DMs** instead of channel posts: needs a bot token (`chat:write`) instead of a webhook.
+- **More DMs** (for example, DM the handler on assignment instead of a channel mention): the bot token is already there, so it's a small change in `Slack.gs`.
 
 ## Development
 

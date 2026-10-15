@@ -12,9 +12,10 @@ var ITEM_COLUMNS = [
   { key: 'workflowStep',  header: 'Workflow Step',      source: true },
   { key: 'priority',      header: 'Priority',           source: true },
   { key: 'developer',     header: 'Developer',          source: true },
-  { key: 'reportedBy',    header: 'Reported By',        source: true },
+  { key: 'reportedBy',    header: 'BA',                 source: true },  // "Reported By" in the AXO export
   { key: 'releaseNotes',  header: 'Release Notes Description', source: true },
   // QA tracking (owned by the team, never overwritten by an import)
+  { key: 'quarter',       header: 'Quarter',            editable: true },
   { key: 'highPriority',  header: 'High Priority',      editable: true },
   { key: 'axoCategory',   header: 'AXO Category',       editable: true },
   { key: 'system',        header: 'System',             editable: true },
@@ -41,7 +42,7 @@ var STATUSES = [
   { name: 'For Review',      fill: '#4614F5', ink: '#FFFFFF', group: 'In Progress' },
   { name: 'Review Points',   fill: '#FFC000', ink: '#1F1F1F', group: 'In Progress' },
   { name: 'For Upload',      fill: '#7030A0', ink: '#FFFFFF', group: 'Completed' },
-  { name: 'Done',            fill: '#196B24', ink: '#FFFFFF', group: 'Completed' },
+  { name: 'Done',            fill: '#475569', ink: '#FFFFFF', group: 'Completed' },
   { name: 'Moved',           fill: '#00B0F0', ink: '#0B1B26', group: 'Discarded' },
   { name: 'Withdraw',        fill: '#FF0000', ink: '#FFFFFF', group: 'Discarded' }
 ];
@@ -69,6 +70,15 @@ function deriveCategory(name) {
   if (/^ERPIS\b/.test(n)) return 'ERPIS';
   if (/^SERPC(AR)?\b/.test(n)) return 'SERPCAR';
   return '';
+}
+
+/** "Q4 2026" for a year and 1-based month. */
+function quarterLabel(year, month) {
+  return 'Q' + (Math.floor((Number(month) - 1) / 3) + 1) + ' ' + year;
+}
+
+function isQuarter(s) {
+  return /^Q[1-4] \d{4}$/.test(String(s || ''));
 }
 
 function statusGroup(status) {
@@ -159,6 +169,7 @@ if (typeof module !== 'undefined') {
   module.exports = {
     ITEM_COLUMNS: ITEM_COLUMNS, STATUSES: STATUSES, DEFAULT_LISTS: DEFAULT_LISTS,
     mapItemType: mapItemType, deriveCategory: deriveCategory, statusGroup: statusGroup,
+    quarterLabel: quarterLabel, isQuarter: isQuarter,
     parseCsv: parseCsv, csvToItems: csvToItems
   };
 }

@@ -91,9 +91,12 @@
       S.statuses.forEach(function (s) { S.statusMap[s.name] = s; });
       S.email = data.email;
       S.slack = data.slackEnabled;
+      S.slackDm = data.slackDm;
+      S.currentQuarter = data.currentQuarter;
       S.loadedAt = Date.now();
       if (initial) setupControls(data);
       renderLede(data);
+      renderQuarters();
       render();
       if (S.openId && S.byId[S.openId]) fillDrawerFields(S.byId[S.openId]);
       if (S.pending === 0) { $('sync').className = 'sync'; $('sync-text').textContent = 'Up to date'; }
@@ -124,8 +127,55 @@
     var hd = '<option value="">Anyone</option><option value="__me">Me</option><option value="__none">Unassigned</option>';
     S.lists.handlers.forEach(function (h) { hd += '<option>' + esc(h) + '</option>'; });
     $('f-handler').innerHTML = hd;
-    $('note-kind').innerHTML = options(S.lists.noteKinds, 'General');
+    $('note-kind').innerHTML = options(S.lists.noteKinds.filter(function (k) { return k !== 'Review Points'; }), 'General');
+    restoreQuarter();
     restoreFilters();
+  }
+
+  // ------------------------------------------------------------ quarters
+  function restoreQuarter() {
+    var q;
+    try { q = JSON.parse(localStorage.getItem('ccqa.quarter') || 'null'); } catch (e) {}
+    var cur = S.currentQuarter.split(' ');
+    S.quarter = q && q.q ? q.q : cur[0];
+    S.year = q && q.y ? q.y : cur[1];
+  }
+  function saveQuarter() { try { localStorage.setItem('ccqa.quarter', JSON.stringify({ q: S.quarter, y: S.year })); } catch (e) {} }
+  function selectedQuarter() { return S.quarter === 'all' ? '' : S.quarter + ' ' + S.year; }
+  function scoped() {
+    var q = selectedQuarter();
+    return q ? S.items.filter(function (i) { return i.quarter === q; }) : S.items;
+  }
+  function years() {
+    var cur = +S.currentQuarter.split(' ')[1], set = {};
+    set[cur] = set[cur - 1] = set[cur + 1] = true;
+    S.items.forEach(function (i) { if (i.quarter) set[i.quarter.split(' ')[1]] = true; });
+    if (S.year) set[S.year] = true;
+    return Object.keys(set).sort();
+  }
+  function quarterOptions(selected) {
+    var html = '';
+    years().forEach(function (y) {
+      for (var q = 1; q <= 4; q++) {
+        var v = 'Q' + q + ' ' + y;
+        html += '<option' + (v === selected ? ' selected' : '') + '>' + v + '</option>';
+      }
+    });
+    return html;
+  }
+  function renderQuarters() {
+    var counts = {};
+    S.items.forEach(function (i) { if (i.quarter) counts[i.quarter] = (counts[i.quarter] || 0) + 1; });
+    var html = '';
+    ['Q1', 'Q2', 'Q3', 'Q4'].forEach(function (q) {
+      var label = q + ' ' + S.year;
+      html += '<button type="button" role="tab" data-q="' + q + '" aria-selected="' + (S.quarter === q) + '"' +
+        (label === S.currentQuarter ? ' class="now" title="Current quarter"' : '') + '>' + q + '<span class="n">' + (counts[label] || 0) + '</span></button>';
+    });
+    html += '<button type="button" role="tab" data-q="all" aria-selected="' + (S.quarter === 'all') + '">All<span class="n">' + S.items.length + '</span></button>';
+    $('q-tabs').innerHTML = html;
+    $('q-year').innerHTML = years().map(function (y) { return '<option' + (y === S.year ? ' selected' : '') + '>' + y + '</option>'; }).join('');
+    $('q-year').disabled = S.quarter === 'all';
   }
 
   // ------------------------------------------------------------ filters
@@ -178,8 +228,9 @@
   }
 
   function renderKpis() {
-    var c = { total: S.items.length, 'Not Started': 0, 'In Progress': 0, Completed: 0, Discarded: 0, hp: 0, unassigned: 0 };
-    S.items.forEach(function (i) {
+    var scope = scoped();
+    var c = { total: scope.length, 'Not Started': 0, 'In Progress': 0, Completed: 0, Discarded: 0, hp: 0, unassigned: 0 };
+    scope.forEach(function (i) {
       var g = group(i.status);
       c[g]++;
       var open = g === 'Not Started' || g === 'In Progress';
@@ -188,7 +239,7 @@
     });
     var f = readFilters();
     var tiles = [
-      { label: 'Total', val: c.total, sub: 'in tracker', tone: 'brand', key: 'all', on: !f.status && !f.hp && !f.handler },
+      { label: 'Total', val: c.total, sub: selectedQuarter() || 'all quarters', tone: 'brand', key: 'all', on: !f.status && !f.hp && !f.handler },
       { label: 'Not started', val: c['Not Started'], sub: 'no status yet', tone: 'neu', key: 'g:Not Started', on: f.status === 'g:Not Started' },
       { label: 'In progress', val: c['In Progress'], sub: 'QA, BA/DEV, review', tone: 'sky', key: 'g:In Progress', on: f.status === 'g:In Progress' },
       { label: 'Completed', val: c.Completed, sub: 'Done + For Upload', tone: 'ok', key: 'g:Completed', on: f.status === 'g:Completed' },
@@ -203,9 +254,9 @@
   }
 
   function renderBreakdown() {
-    var counts = {}, none = 0;
-    S.items.forEach(function (i) { if (i.status) counts[i.status] = (counts[i.status] || 0) + 1; else none++; });
-    var total = S.items.length || 1;
+    var counts = {}, none = 0, scope = scoped();
+    scope.forEach(function (i) { if (i.status) counts[i.status] = (counts[i.status] || 0) + 1; else none++; });
+    var total = scope.length || 1;
     var segs = [{ name: '', label: 'Not started', fill: 'var(--line-strong)', ink: 'var(--fg)', n: none }]
       .concat(S.statuses.map(function (s) { return { name: s.name, label: s.name, fill: s.fill, ink: s.ink, n: counts[s.name] || 0 }; }));
     $('stack').innerHTML = segs.filter(function (s) { return s.n; }).map(function (s) {
@@ -229,15 +280,16 @@
 
   function rowHtml(i) {
     var n = S.noteCounts[i.id] || 0;
-    var sub = [i.workflowStep, i.developer ? 'Dev: ' + i.developer : ''].filter(Boolean).map(esc).join(' · ');
+    var sub = esc(i.workflowStep);
     if (!i.inLatestImport && i.lastImported) sub += ' · <span class="gone">not in latest export</span>';
     var stOpts = '<option value="">Not started</option>' + S.statuses.map(function (s) {
       return '<option' + (s.name === i.status ? ' selected' : '') + '>' + esc(s.name) + '</option>';
     }).join('');
     return '<tr data-id="' + esc(i.id) + '"' + (i.highPriority ? ' class="is-hp"' : '') + '>' +
-      '<td><button type="button" class="id-link" data-open="' + esc(i.id) + '">' + esc(i.id) + '</button></td>' +
+      '<td><button type="button" class="id-link" data-open="' + esc(i.id) + '">' + esc(i.id) + '</button>' +
+        (S.quarter === 'all' && i.quarter ? '<span class="q-tag">' + esc(i.quarter) + '</span>' : '') + '</td>' +
       '<td><span class="type ' + (i.itemType === 'Bug' ? 'bug' : 'story') + '">' + esc(i.itemType) + '</span></td>' +
-      '<td class="c-name"><span class="nm" data-open="' + esc(i.id) + '">' + esc(i.name) + '</span><span class="sub">' + sub + '</span></td>' +
+      '<td class="c-name"><span class="nm" data-open="' + esc(i.id) + '">' + esc(i.name) + '</span><span class="sub">' + sub + '</span>' + peopleHtml(i) + '</td>' +
       '<td><select class="cell-sel" data-field="axoCategory" aria-label="AXO Category">' + options(S.lists.categories, i.axoCategory, '—') + '</select></td>' +
       '<td><span class="prio ' + esc(i.priority) + '">' + esc(i.priority || 'None') + '</span></td>' +
       '<td><input type="checkbox" class="hp-box" data-field="highPriority" aria-label="High priority"' + (i.highPriority ? ' checked' : '') + '></td>' +
@@ -249,9 +301,17 @@
       '</tr>';
   }
 
+  function peopleHtml(i) {
+    var who = function (label, name) {
+      return '<span><em>' + label + '</em>' + (name ? esc(name) : '<span class="none">Not set</span>') + '</span>';
+    };
+    return '<div class="people">' + who('Dev', i.developer) + who('BA', i.reportedBy) + '</div>';
+  }
+
   function renderTable() {
     var f = readFilters();
-    var rows = S.items.filter(function (i) { return matches(i, f); });
+    var scope = scoped();
+    var rows = scope.filter(function (i) { return matches(i, f); });
     var k = S.sort.key, d = S.sort.dir;
     rows.sort(function (a, b) {
       var x = sortVal(a, k), y = sortVal(b, k);
@@ -264,8 +324,10 @@
       else { th.removeAttribute('aria-sort'); th.querySelector('.arr').textContent = '▾'; }
     });
     $('tbody').innerHTML = rows.length ? rows.map(rowHtml).join('') :
-      '<tr><td colspan="11" class="empty">' + (S.items.length ? 'No items match these filters.' : 'No items yet. Import the AXO CSV export to get started.') + '</td></tr>';
-    $('count').textContent = rows.length === S.items.length ? S.items.length + ' items' : rows.length + ' of ' + S.items.length + ' items';
+      '<tr><td colspan="11" class="empty">' + (scope.length ? 'No items match these filters.' :
+        S.items.length ? 'No AXOs tagged ' + esc(selectedQuarter()) + ' yet.' : 'No items yet. Import the AXO CSV export to get started.') + '</td></tr>';
+    var where = selectedQuarter() ? ' in ' + selectedQuarter() : '';
+    $('count').textContent = (rows.length === scope.length ? scope.length : rows.length + ' of ' + scope.length) + ' items' + where;
   }
 
   function replaceRow(id, flash) {
@@ -284,6 +346,12 @@
     if (!item) return;
     var prev = item[field];
     if (prev === value) return;
+    if (field === 'status' && value === 'Review Points') {
+      replaceRow(id);
+      if (S.openId === id) fillDrawerFields(item);
+      openReview(id);
+      return;
+    }
     item[field] = value;
     var patch = {}; patch[field] = value;
     replaceRow(id);
@@ -325,16 +393,18 @@
     $('d-prio').className = 'prio ' + item.priority;
     $('d-prio').textContent = item.priority || 'No priority';
     $('d-title').textContent = item.name;
+    $('d-people').innerHTML = peopleHtml(item).replace(/^<div class="people">|<\/div>$/g, '');
     $('d-status').innerHTML = '<option value="">Not started</option>' + options(S.statuses.map(function (s) { return s.name; }), item.status);
     $('d-handler').innerHTML = options(S.lists.handlers, item.handler, 'Unassigned');
     $('d-system').innerHTML = options(S.lists.systems, item.system, '—');
     $('d-cat').innerHTML = options(S.lists.categories, item.axoCategory, '—');
+    $('d-quarter').innerHTML = (item.quarter ? '' : '<option value="">—</option>') + quarterOptions(item.quarter);
     fillDrawerFields(item);
     $('d-saved').textContent = '';
     $('note-hint').textContent = me() ? 'as ' + me() : 'Pick your name in the top bar so notes are signed';
     $('d-facts').innerHTML = [
       ['Workflow Step', item.workflowStep], ['Priority', item.priority], ['Developer', item.developer],
-      ['Reported By', item.reportedBy], ['Release Notes', item.releaseNotes],
+      ['BA', item.reportedBy], ['Release Notes', item.releaseNotes],
       ['Last imported', item.lastImported ? fmtWhen(item.lastImported) + (item.inLatestImport ? '' : ' (not in latest export)') : 'Added by hand'],
       ['Last updated', item.updatedAt ? fmtWhen(item.updatedAt) + ' by ' + item.updatedBy.replace(/\s*<.*>$/, '') : '']
     ].map(function (r) { return '<dt>' + r[0] + '</dt><dd>' + (esc(r[1]) || '<span class="muted">—</span>') + '</dd>'; }).join('');
@@ -345,7 +415,7 @@
   }
 
   function fillDrawerFields(item, skipField) {
-    ['d-status', 'd-handler', 'd-system', 'd-cat', 'd-done', 'd-hp', 'd-cdev', 'd-csed'].forEach(function (id) {
+    ['d-status', 'd-handler', 'd-system', 'd-cat', 'd-quarter', 'd-done', 'd-hp', 'd-cdev', 'd-csed'].forEach(function (id) {
       var el = $(id), f = el.dataset.field;
       if (f === skipField && document.activeElement === el) return;
       if (document.activeElement === el && el.tagName === 'TEXTAREA') return;
@@ -358,6 +428,7 @@
     });
     var st = $('d-status');
     st.setAttribute('style', statusStyle(item.status) + (item.status ? ';font-weight:700' : ''));
+    $('d-rp').hidden = item.status !== 'Review Points';
   }
 
   function loadDetail(id) {
@@ -373,7 +444,7 @@
   }
 
   function noteHtml(n) {
-    return '<li class="note k-' + esc(n.kind) + '"><div class="note-meta"><span class="note-kind">' + esc(n.kind) + '</span><b>' +
+    return '<li class="note k-' + esc(String(n.kind).replace(/[^A-Za-z0-9]+/g, '-')) + '"><div class="note-meta"><span class="note-kind">' + esc(n.kind) + '</span><b>' +
       esc(n.author.replace(/\s*<.*>$/, '')) + '</b><span>' + esc(fmtWhen(n.createdAt)) + '</span></div><p>' + esc(n.text) + '</p></li>';
   }
 
@@ -410,9 +481,9 @@
     if (!importText) return;
     $('import-go').disabled = true;
     $('import-go').textContent = 'Importing…';
-    call('importCsv', importText, me()).then(function (res) {
+    call('importCsv', importText, me(), $('import-quarter').value).then(function (res) {
       $('import-result').hidden = false;
-      $('import-result').innerHTML = '<b>' + res.added + '</b> new, <b>' + res.updated + '</b> updated, ' + res.unchanged + ' unchanged' +
+      $('import-result').innerHTML = '<b>' + res.added + '</b> new (tagged ' + esc(res.quarter) + '), <b>' + res.updated + '</b> updated, ' + res.unchanged + ' unchanged' +
         (res.dropped ? ', ' + res.dropped + ' no longer in the export (kept, flagged)' : '') + '.';
       importText = null;
       $('import-go').textContent = 'Import';
@@ -431,11 +502,74 @@
     $('a-cat').innerHTML = options(S.lists.categories, '', '—');
     $('a-handler').innerHTML = options(S.lists.handlers, me(), 'Unassigned');
     $('a-system').innerHTML = options(S.lists.systems, '', '—');
+    $('a-quarter').innerHTML = quarterOptions(selectedQuarter() || S.currentQuarter);
     $('add-dlg').showModal();
+  }
+
+  // ------------------------------------------------------------ review points
+  var rpId = null;
+  function openReview(id) {
+    var item = S.byId[id];
+    if (!item) return;
+    rpId = id;
+    $('rp-err').hidden = true;
+    $('rp-text').value = '';
+    $('rp-title').textContent = 'Review points for AXO ' + id;
+    $('rp-sub').textContent = item.name;
+    $('rp-reviewer').innerHTML = options(S.lists.handlers, me(), 'Pick the reviewer');
+    var to = $('rp-to'), h = item.handler;
+    var dmReady = S.slackDm && S.lists.slackHandlers.indexOf(h) >= 0;
+    to.className = 'rp-to' + (dmReady ? '' : ' warn');
+    to.innerHTML = !h ? 'This AXO has no handler. Points are saved' + (S.slack ? ' and posted to the channel.' : '.') :
+      dmReady ? 'Sent to <b>' + esc(h) + '</b> as a Slack DM and saved in the notes.' :
+      S.slack ? '<b>' + esc(h) + '</b> can’t be DMed yet (' + (S.slackDm ? 'no Slack ID in the Lists tab' : 'Slack bot token not set') + '). Points will post to the channel with a mention.' :
+      'Slack isn’t connected. Points are saved in the notes only.';
+    $('rp-dlg').showModal();
+    $('rp-text').focus();
   }
 
   // ------------------------------------------------------------ events
   function bind() {
+    $('q-tabs').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-q]');
+      if (!b) return;
+      S.quarter = b.dataset.q;
+      saveQuarter(); renderQuarters(); render();
+    });
+    $('q-year').addEventListener('change', function (e) {
+      S.year = e.target.value;
+      saveQuarter(); renderQuarters(); render();
+    });
+
+    $('rp-cancel').addEventListener('click', function () { $('rp-dlg').close(); });
+    $('d-rp-btn').addEventListener('click', function () { if (S.openId) openReview(S.openId); });
+    $('rp-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var id = rpId, text = $('rp-text').value.trim(), reviewer = $('rp-reviewer').value;
+      if (!id || !text) return;
+      if (!reviewer) { showErr('rp-err', 'Pick who is reviewing.'); return; }
+      $('rp-send').disabled = true;
+      busy(1);
+      call('setReviewPoints', id, text, reviewer).then(function (res) {
+        busy(-1);
+        $('rp-send').disabled = false;
+        $('rp-dlg').close();
+        Object.assign(S.byId[id], res.item);
+        S.noteCounts[id] = (S.noteCounts[id] || 0) + 1;
+        replaceRow(id, true);
+        renderKpis(); renderBreakdown();
+        if (S.openId === id) { fillDrawerFields(S.byId[id]); loadDetail(id); }
+        var sl = res.slack || {};
+        toast(sl.via === 'dm' ? 'Review points sent to ' + sl.to + ' on Slack' :
+          sl.via === 'channel' ? 'Review points posted to the Slack channel (' + sl.reason + ')' :
+          'Review points saved' + (sl.reason ? '; not sent to Slack: ' + sl.reason : ''), sl.via === 'none' && S.slack);
+      }).catch(function (err) {
+        busy(-1);
+        $('rp-send').disabled = false;
+        showErr('rp-err', err.message);
+      });
+    });
+
     $('me-select').addEventListener('change', function (e) {
       setMe(e.target.value);
       if ($('f-handler').value === '__me') renderTable();
@@ -489,7 +623,7 @@
     });
 
     // Drawer fields: selects/date save on change, textareas on blur.
-    ['d-status', 'd-handler', 'd-system', 'd-cat', 'd-done', 'd-hp'].forEach(function (id) {
+    ['d-status', 'd-handler', 'd-system', 'd-cat', 'd-quarter', 'd-done', 'd-hp'].forEach(function (id) {
       $(id).addEventListener('change', function (e) { drawerSave(e.target); });
     });
     ['d-cdev', 'd-csed'].forEach(function (id) {
@@ -500,9 +634,10 @@
       if (!id) return;
       var f = el.dataset.field, v = fieldValue(el);
       if (S.byId[id][f] === v) return;
-      $('d-saved').textContent = 'Saving…';
       var p = save(id, f, v);
-      if (p) p.then(function (r) { if (r && S.openId === id) $('d-saved').textContent = 'Saved'; });
+      if (!p) return;
+      $('d-saved').textContent = 'Saving…';
+      p.then(function (r) { if (r && S.openId === id) $('d-saved').textContent = 'Saved'; });
     }
 
     $('d-close').addEventListener('click', closeDrawer);
@@ -543,6 +678,7 @@
       $('import-err').hidden = true; $('import-result').hidden = true;
       $('drop-title').textContent = 'Drop the CSV here or click to choose';
       $('drop-sub').textContent = 'Item Type is mapped on import: defects → Bug, features → User Story';
+      $('import-quarter').innerHTML = quarterOptions(selectedQuarter() || S.currentQuarter);
       $('import-dlg').showModal();
     });
     $('import-cancel').addEventListener('click', function () { $('import-dlg').close(); });
@@ -563,7 +699,7 @@
       var item = {
         id: $('a-id').value.trim(), itemType: $('a-type').value, name: $('a-name').value.trim(),
         axoCategory: $('a-cat').value, priority: $('a-prio').value, handler: $('a-handler').value, system: $('a-system').value,
-        highPriority: $('a-prio').value === 'High'
+        highPriority: $('a-prio').value === 'High', quarter: $('a-quarter').value
       };
       call('addItem', item, me()).then(function (rec) {
         $('add-dlg').close();
