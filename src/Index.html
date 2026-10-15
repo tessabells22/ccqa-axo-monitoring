@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CCQA AXO Tracker</title>
+  <?!= include('Styles'); ?>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brandbar">
+      <svg width="36" height="29" viewBox="0 0 36 32" role="img" aria-label="ShipERP">
+        <g class="box" fill="none" stroke-width="2.1" stroke-linejoin="round" stroke-linecap="round">
+          <path d="M21 4 L34 9.5 L21 15 L8 9.5 Z"/><path d="M34 9.5 V22 L21 27.5 L8 22 V9.5"/><path d="M21 15 V27.5"/>
+        </g>
+        <g class="speed" fill="none" stroke-width="2.1" stroke-linecap="round">
+          <path d="M1 12 H6.5"/><path d="M1 17.5 H5"/><path d="M2.5 23 H6"/>
+        </g>
+      </svg>
+      <div class="wordmark">Ship<span>ERP</span></div>
+      <span class="divider" aria-hidden="true"></span>
+      <span class="app-name">AXO Monitoring</span>
+      <span class="role">CCQA</span>
+    </div>
+    <label class="me" for="me-select">You
+      <select id="me-select"><option value="">Pick your name</option></select>
+    </label>
+    <span class="sync" id="sync"><i></i><span id="sync-text">Loading</span></span>
+    <button class="btn" id="add-btn" type="button">Add item</button>
+    <button class="btn btn-primary" id="import-btn" type="button">Import AXO CSV</button>
+  </header>
+
+  <main class="wrap">
+    <div class="page-head">
+      <div>
+        <div class="eyebrow">Carrier Compliance QA</div>
+        <h1>AXO Monitoring Tracker</h1>
+        <p class="lede" id="lede">Loading the tracker…</p>
+      </div>
+    </div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <section class="panel breakdown" aria-labelledby="bd-title">
+      <div class="breakdown-head"><h2 id="bd-title">Status breakdown</h2><span>Click a status to filter</span></div>
+      <div class="stack" id="stack"></div>
+      <div class="legend" id="legend"></div>
+    </section>
+
+    <section class="panel">
+      <div class="filters">
+        <div class="field"><label for="f-q">Search</label><input type="search" id="f-q" placeholder="AXO number, name, developer…"></div>
+        <div class="field"><label for="f-cat">AXO Category</label><select id="f-cat"><option value="">All</option></select></div>
+        <div class="field"><label for="f-type">Item Type</label><select id="f-type"><option value="">All</option><option>Bug</option><option>User Story</option></select></div>
+        <div class="field"><label for="f-status">Status</label><select id="f-status"></select></div>
+        <div class="field"><label for="f-handler">Handler</label><select id="f-handler"></select></div>
+        <div class="field"><label for="f-prio">Priority</label><select id="f-prio"><option value="">All</option><option>High</option><option>Medium</option><option>Low</option><option value="(none)">None set</option></select></div>
+        <label class="toggle"><input type="checkbox" id="f-hp">High priority only</label>
+        <label class="toggle"><input type="checkbox" id="f-gone">Not in latest import</label>
+        <button class="btn btn-quiet" id="f-clear" type="button">Clear</button>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th data-sort="id">ID<span class="arr">▾</span></th>
+              <th data-sort="itemType">Item Type<span class="arr">▾</span></th>
+              <th data-sort="name">Name<span class="arr">▾</span></th>
+              <th data-sort="axoCategory">Category<span class="arr">▾</span></th>
+              <th data-sort="priority">Priority<span class="arr">▾</span></th>
+              <th data-sort="highPriority" class="hp-head" title="High Priority">HP<span class="arr">▾</span></th>
+              <th data-sort="system">System<span class="arr">▾</span></th>
+              <th data-sort="handler">Handler<span class="arr">▾</span></th>
+              <th data-sort="status">Status<span class="arr">▾</span></th>
+              <th data-sort="completedOn">Completed<span class="arr">▾</span></th>
+              <th data-sort="notes">Notes<span class="arr">▾</span></th>
+            </tr>
+          </thead>
+          <tbody id="tbody"><tr><td colspan="11" class="loading">Loading items…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="table-foot"><span id="count"></span><span id="sheet-link"></span></div>
+    </section>
+  </main>
+
+  <!-- Item drawer -->
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="drawer" id="drawer" hidden aria-labelledby="d-title" role="dialog" aria-modal="true">
+    <div class="d-head">
+      <div class="d-top"><span class="mono" id="d-id"></span><span id="d-type"></span><span class="prio" id="d-prio"></span>
+        <button class="btn btn-sm" id="d-close" type="button">Close</button></div>
+      <h2 id="d-title"></h2>
+    </div>
+    <div class="d-body">
+      <section>
+        <h3>QA tracking</h3>
+        <div class="qa-grid">
+          <label>Status<select id="d-status" data-field="status"></select></label>
+          <label>Handler<select id="d-handler" data-field="handler"></select></label>
+          <label>System<select id="d-system" data-field="system"></select></label>
+          <label>AXO Category<select id="d-cat" data-field="axoCategory"></select></label>
+          <label>Date of Completion<input type="date" id="d-done" data-field="completedOn"></label>
+          <label>High Priority<select id="d-hp" data-field="highPriority"><option value="false">No</option><option value="true">Yes</option></select></label>
+          <label class="full"><span class="lbl-dev">Comment/Note (DEV)</span><textarea id="d-cdev" data-field="commentDev" placeholder="Current state in DEV, latest result"></textarea></label>
+          <label class="full"><span class="lbl-sed">Comment/Note (SED)</span><textarea id="d-csed" data-field="commentSed" placeholder="Current state in SED"></textarea></label>
+        </div>
+        <div class="saved-hint" id="d-saved" aria-live="polite"></div>
+      </section>
+
+      <section>
+        <h3>Team notes</h3>
+        <form class="note-form" id="note-form">
+          <textarea id="note-text" placeholder="What happened, what's left, who it's waiting on" maxlength="5000" required></textarea>
+          <div class="row">
+            <select id="note-kind" aria-label="Note type"></select>
+            <span class="muted" id="note-hint" style="font-size:12px"></span>
+            <button class="btn btn-primary btn-sm" type="submit" id="note-add">Add note</button>
+          </div>
+        </form>
+        <ul class="notes" id="notes"></ul>
+      </section>
+
+      <section>
+        <h3>From AXO</h3>
+        <dl class="facts" id="d-facts"></dl>
+      </section>
+
+      <section>
+        <h3>History</h3>
+        <ul class="activity" id="activity"></ul>
+      </section>
+    </div>
+  </aside>
+
+  <!-- Import -->
+  <dialog id="import-dlg">
+    <form method="dialog" id="import-form">
+      <div class="dlg-head"><h2>Import AXO CSV</h2><p>Use the items export from AXO. New AXOs are added; existing ones get their AXO fields refreshed.</p></div>
+      <div class="dlg-body">
+        <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a CSV file">
+          <strong id="drop-title">Drop the CSV here or click to choose</strong>
+          <span id="drop-sub">Item Type is mapped on import: defects → Bug, features → User Story</span>
+        </div>
+        <input type="file" id="file" accept=".csv,text/csv" hidden>
+        <div class="tip"><b>Your QA work is safe.</b> Status, handler, system, comments and notes are never overwritten by an import.</div>
+        <div class="dlg-err" id="import-err" hidden></div>
+        <div class="result" id="import-result" hidden></div>
+      </div>
+      <div class="dlg-foot">
+        <button class="btn" value="cancel" type="button" id="import-cancel">Close</button>
+        <button class="btn btn-primary" type="button" id="import-go" disabled>Import</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Add item -->
+  <dialog id="add-dlg">
+    <form id="add-form">
+      <div class="dlg-head"><h2>Add an AXO by hand</h2><p>For items that aren't in an export yet. The next import fills in the AXO fields.</p></div>
+      <div class="dlg-body qa-grid">
+        <label>AXO ID<input id="a-id" inputmode="numeric" pattern="\d+" required></label>
+        <label>Item Type<select id="a-type"><option>Bug</option><option>User Story</option></select></label>
+        <label class="full">Name<input id="a-name" required></label>
+        <label>AXO Category<select id="a-cat"></select></label>
+        <label>Priority<select id="a-prio"><option value="">None</option><option>High</option><option>Medium</option><option>Low</option></select></label>
+        <label>Handler<select id="a-handler"></select></label>
+        <label>System<select id="a-system"></select></label>
+        <div class="dlg-err full" id="add-err" hidden></div>
+      </div>
+      <div class="dlg-foot">
+        <button class="btn" type="button" id="add-cancel">Cancel</button>
+        <button class="btn btn-primary" type="submit">Add item</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" hidden role="status"></div>
+
+  <?!= include('Script'); ?>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "ccqa-axo-monitoring",
+  "private": true,
+  "description": "CCQA AXO Monitoring Tracker (Google Apps Script web app)",
+  "scripts": {
+    "test": "node --test tests/tracker.test.js",
+    "preview": "node tools/preview-server.js",
+    "push": "clasp push"
+  }
+}

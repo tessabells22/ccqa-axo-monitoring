@@ -1,0 +1,601 @@
+<script>
+(function () {
+  'use strict';
+
+  var S = {
+    items: [], byId: {}, noteCounts: {}, lists: {}, statuses: [], statusMap: {},
+    sort: { key: 'id', dir: -1 }, openId: null, pending: 0, loadedAt: 0, email: ''
+  };
+  var $ = function (id) { return document.getElementById(id); };
+  var GROUPS = ['Not Started', 'In Progress', 'Completed', 'Discarded'];
+
+  // ------------------------------------------------------------ server calls
+  function call(fn) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return new Promise(function (resolve, reject) {
+      var runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(function (e) {
+        reject(e && e.message ? e : new Error(String(e)));
+      });
+      runner[fn].apply(runner, args);
+    });
+  }
+  function busy(delta) {
+    S.pending += delta;
+    var el = $('sync');
+    el.className = 'sync' + (S.pending > 0 ? ' busy' : '');
+    $('sync-text').textContent = S.pending > 0 ? 'Saving…' : 'Saved';
+  }
+  function failSync(msg) {
+    $('sync').className = 'sync err';
+    $('sync-text').textContent = 'Not saved';
+    toast(msg, true);
+  }
+
+  // ------------------------------------------------------------ helpers
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function me() { try { return localStorage.getItem('ccqa.me') || ''; } catch (e) { return ''; } }
+  function setMe(v) { try { localStorage.setItem('ccqa.me', v); } catch (e) {} }
+  function group(status) {
+    if (!status) return 'Not Started';
+    return (S.statusMap[status] && S.statusMap[status].group) || 'In Progress';
+  }
+  function fmtWhen(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d)) return iso;
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+  function fmtDay(s) {
+    if (!s) return '';
+    var p = s.split('-');
+    return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+  var toastTimer;
+  function toast(msg, isErr) {
+    var t = $('toast');
+    t.textContent = msg;
+    t.className = 'toast' + (isErr ? ' err' : '');
+    t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.hidden = true; }, isErr ? 6000 : 3000);
+  }
+  function options(list, selected, blankLabel) {
+    var html = blankLabel != null ? '<option value="">' + esc(blankLabel) + '</option>' : '';
+    var seen = false;
+    list.forEach(function (v) {
+      if (v === selected) seen = true;
+      html += '<option' + (v === selected ? ' selected' : '') + '>' + esc(v) + '</option>';
+    });
+    if (selected && !seen) html += '<option selected>' + esc(selected) + '</option>';
+    return html;
+  }
+  function statusStyle(status) {
+    var s = S.statusMap[status];
+    return s ? 'background:' + s.fill + ';color:' + s.ink : '';
+  }
+
+  // ------------------------------------------------------------ load
+  function load(initial) {
+    return call('getBootstrap').then(function (data) {
+      S.items = data.items;
+      S.byId = {};
+      S.items.forEach(function (i) { S.byId[i.id] = i; });
+      S.noteCounts = data.noteCounts || {};
+      S.lists = data.lists;
+      S.statuses = data.statuses;
+      S.statusMap = {};
+      S.statuses.forEach(function (s) { S.statusMap[s.name] = s; });
+      S.email = data.email;
+      S.slack = data.slackEnabled;
+      S.loadedAt = Date.now();
+      if (initial) setupControls(data);
+      renderLede(data);
+      render();
+      if (S.openId && S.byId[S.openId]) fillDrawerFields(S.byId[S.openId]);
+      if (S.pending === 0) { $('sync').className = 'sync'; $('sync-text').textContent = 'Up to date'; }
+    });
+  }
+
+  function renderLede(data) {
+    var parts = ['<b>' + S.items.length + '</b> AXO items'];
+    if (data.lastImport) {
+      var li = data.lastImport.split('|');
+      parts.push('last import ' + esc(fmtWhen(li[0])) + (li[1] ? ' by ' + esc(li[1].replace(/\s*<.*>$/, '')) : ''));
+    } else {
+      parts.push('no import yet: start with <b>Import AXO CSV</b>');
+    }
+    parts.push('Slack ' + (data.slackEnabled ? 'notifications on' : 'not connected'));
+    $('lede').innerHTML = parts.join(' · ');
+    if (data.sheetUrl) $('sheet-link').innerHTML = '<a href="' + esc(data.sheetUrl) + '" target="_blank" rel="noopener" style="color:var(--brand)">Open the Google Sheet</a>';
+  }
+
+  function setupControls() {
+    $('me-select').innerHTML = options(S.lists.handlers, me(), 'Pick your name');
+    $('f-cat').innerHTML = options(S.lists.categories, '', 'All');
+    var st = '<option value="">All</option><option value="__open">Open</option>';
+    GROUPS.forEach(function (g) { st += '<option value="g:' + g + '">' + g + '</option>'; });
+    st += '<optgroup label="Status">';
+    S.statuses.forEach(function (s) { st += '<option value="s:' + esc(s.name) + '">' + esc(s.name) + '</option>'; });
+    $('f-status').innerHTML = st + '</optgroup>';
+    var hd = '<option value="">Anyone</option><option value="__me">Me</option><option value="__none">Unassigned</option>';
+    S.lists.handlers.forEach(function (h) { hd += '<option>' + esc(h) + '</option>'; });
+    $('f-handler').innerHTML = hd;
+    $('note-kind').innerHTML = options(S.lists.noteKinds, 'General');
+    restoreFilters();
+  }
+
+  // ------------------------------------------------------------ filters
+  var FILTER_IDS = ['f-q', 'f-cat', 'f-type', 'f-status', 'f-handler', 'f-prio', 'f-hp', 'f-gone'];
+  function readFilters() {
+    return {
+      q: $('f-q').value.trim().toLowerCase(), cat: $('f-cat').value, type: $('f-type').value,
+      status: $('f-status').value, handler: $('f-handler').value, prio: $('f-prio').value,
+      hp: $('f-hp').checked, gone: $('f-gone').checked
+    };
+  }
+  function saveFilters() {
+    try { localStorage.setItem('ccqa.filters', JSON.stringify(readFilters())); } catch (e) {}
+  }
+  function restoreFilters() {
+    var f;
+    try { f = JSON.parse(localStorage.getItem('ccqa.filters') || 'null'); } catch (e) {}
+    if (!f) return;
+    $('f-q').value = f.q || ''; $('f-cat').value = f.cat || ''; $('f-type').value = f.type || '';
+    $('f-status').value = f.status || ''; $('f-handler').value = f.handler || ''; $('f-prio').value = f.prio || '';
+    $('f-hp').checked = !!f.hp; $('f-gone').checked = !!f.gone;
+  }
+  function matches(i, f) {
+    if (f.q) {
+      var hay = (i.id + ' ' + i.name + ' ' + i.developer + ' ' + i.reportedBy + ' ' + i.commentDev + ' ' + i.commentSed + ' ' + i.workflowStep).toLowerCase();
+      if (hay.indexOf(f.q) < 0) return false;
+    }
+    if (f.cat && i.axoCategory !== f.cat) return false;
+    if (f.type && i.itemType !== f.type) return false;
+    if (f.prio === '(none)' ? !!i.priority : (f.prio && i.priority !== f.prio)) return false;
+    if (f.hp && !i.highPriority) return false;
+    if (f.gone && i.inLatestImport) return false;
+    if (f.status) {
+      var g = group(i.status);
+      if (f.status === '__open' && g !== 'Not Started' && g !== 'In Progress') return false;
+      if (f.status.indexOf('g:') === 0 && g !== f.status.slice(2)) return false;
+      if (f.status.indexOf('s:') === 0 && i.status !== f.status.slice(2)) return false;
+    }
+    if (f.handler === '__me') { if (!me() || i.handler !== me()) return false; }
+    else if (f.handler === '__none') { if (i.handler) return false; }
+    else if (f.handler && i.handler !== f.handler) return false;
+    return true;
+  }
+
+  // ------------------------------------------------------------ render
+  function render() {
+    renderKpis();
+    renderBreakdown();
+    renderTable();
+  }
+
+  function renderKpis() {
+    var c = { total: S.items.length, 'Not Started': 0, 'In Progress': 0, Completed: 0, Discarded: 0, hp: 0, unassigned: 0 };
+    S.items.forEach(function (i) {
+      var g = group(i.status);
+      c[g]++;
+      var open = g === 'Not Started' || g === 'In Progress';
+      if (open && i.highPriority) c.hp++;
+      if (open && !i.handler) c.unassigned++;
+    });
+    var f = readFilters();
+    var tiles = [
+      { label: 'Total', val: c.total, sub: 'in tracker', tone: 'brand', key: 'all', on: !f.status && !f.hp && !f.handler },
+      { label: 'Not started', val: c['Not Started'], sub: 'no status yet', tone: 'neu', key: 'g:Not Started', on: f.status === 'g:Not Started' },
+      { label: 'In progress', val: c['In Progress'], sub: 'QA, BA/DEV, review', tone: 'sky', key: 'g:In Progress', on: f.status === 'g:In Progress' },
+      { label: 'Completed', val: c.Completed, sub: 'Done + For Upload', tone: 'ok', key: 'g:Completed', on: f.status === 'g:Completed' },
+      { label: 'Discarded', val: c.Discarded, sub: 'Moved + Withdraw', tone: 'neu', key: 'g:Discarded', on: f.status === 'g:Discarded' },
+      { label: 'High priority open', val: c.hp, sub: 'not completed', tone: 'bad', key: 'hp', on: f.hp && f.status === '__open' },
+      { label: 'Unassigned open', val: c.unassigned, sub: 'no handler', tone: 'orange', key: 'unassigned', on: f.handler === '__none' && f.status === '__open' }
+    ];
+    $('kpis').innerHTML = tiles.map(function (t) {
+      return '<button type="button" class="kpi t-' + t.tone + '" data-kpi="' + t.key + '" aria-pressed="' + !!t.on + '">' +
+        '<div class="k-label">' + t.label + '</div><div class="k-val">' + t.val + '</div><div class="k-sub">' + t.sub + '</div></button>';
+    }).join('');
+  }
+
+  function renderBreakdown() {
+    var counts = {}, none = 0;
+    S.items.forEach(function (i) { if (i.status) counts[i.status] = (counts[i.status] || 0) + 1; else none++; });
+    var total = S.items.length || 1;
+    var segs = [{ name: '', label: 'Not started', fill: 'var(--line-strong)', ink: 'var(--fg)', n: none }]
+      .concat(S.statuses.map(function (s) { return { name: s.name, label: s.name, fill: s.fill, ink: s.ink, n: counts[s.name] || 0 }; }));
+    $('stack').innerHTML = segs.filter(function (s) { return s.n; }).map(function (s) {
+      var pct = s.n / total * 100;
+      return '<button type="button" data-status="' + esc(s.name) + '" style="flex:' + s.n + ';background:' + s.fill + ';color:' + s.ink + '" title="' +
+        esc(s.label) + ': ' + s.n + ' (' + Math.round(pct) + '%)">' + (pct >= 5 ? s.n : '') + '</button>';
+    }).join('');
+    $('legend').innerHTML = segs.map(function (s) {
+      return '<button type="button" data-status="' + esc(s.name) + '"><i style="background:' + s.fill + '"></i>' + esc(s.label) + ' <b>' + s.n + '</b></button>';
+    }).join('');
+  }
+
+  function sortVal(i, k) {
+    if (k === 'id') return +i.id || 0;
+    if (k === 'notes') return S.noteCounts[i.id] || 0;
+    if (k === 'highPriority') return i.highPriority ? 1 : 0;
+    if (k === 'priority') return { High: 3, Medium: 2, Low: 1 }[i.priority] || 0;
+    if (k === 'status') return i.status ? S.statuses.findIndex(function (s) { return s.name === i.status; }) + 1 : 0;
+    return String(i[k] || '').toLowerCase();
+  }
+
+  function rowHtml(i) {
+    var n = S.noteCounts[i.id] || 0;
+    var sub = [i.workflowStep, i.developer ? 'Dev: ' + i.developer : ''].filter(Boolean).map(esc).join(' · ');
+    if (!i.inLatestImport && i.lastImported) sub += ' · <span class="gone">not in latest export</span>';
+    var stOpts = '<option value="">Not started</option>' + S.statuses.map(function (s) {
+      return '<option' + (s.name === i.status ? ' selected' : '') + '>' + esc(s.name) + '</option>';
+    }).join('');
+    return '<tr data-id="' + esc(i.id) + '"' + (i.highPriority ? ' class="is-hp"' : '') + '>' +
+      '<td><button type="button" class="id-link" data-open="' + esc(i.id) + '">' + esc(i.id) + '</button></td>' +
+      '<td><span class="type ' + (i.itemType === 'Bug' ? 'bug' : 'story') + '">' + esc(i.itemType) + '</span></td>' +
+      '<td class="c-name"><span class="nm" data-open="' + esc(i.id) + '">' + esc(i.name) + '</span><span class="sub">' + sub + '</span></td>' +
+      '<td><select class="cell-sel" data-field="axoCategory" aria-label="AXO Category">' + options(S.lists.categories, i.axoCategory, '—') + '</select></td>' +
+      '<td><span class="prio ' + esc(i.priority) + '">' + esc(i.priority || 'None') + '</span></td>' +
+      '<td><input type="checkbox" class="hp-box" data-field="highPriority" aria-label="High priority"' + (i.highPriority ? ' checked' : '') + '></td>' +
+      '<td><select class="cell-sel" data-field="system" aria-label="System">' + options(S.lists.systems, i.system, '—') + '</select></td>' +
+      '<td><select class="cell-sel" data-field="handler" aria-label="Handler">' + options(S.lists.handlers, i.handler, 'Unassigned') + '</select></td>' +
+      '<td><select class="cell-sel status-sel' + (i.status ? '' : ' none') + '" data-field="status" aria-label="Status" style="' + statusStyle(i.status) + '">' + stOpts + '</select></td>' +
+      '<td><input type="date" class="cell-date" data-field="completedOn" aria-label="Date of completion" value="' + esc(i.completedOn) + '"></td>' +
+      '<td><button type="button" class="notes-btn' + (n ? ' has' : '') + '" data-open="' + esc(i.id) + '" data-focus="notes">' + (n ? n + ' note' + (n > 1 ? 's' : '') : 'Add note') + '</button></td>' +
+      '</tr>';
+  }
+
+  function renderTable() {
+    var f = readFilters();
+    var rows = S.items.filter(function (i) { return matches(i, f); });
+    var k = S.sort.key, d = S.sort.dir;
+    rows.sort(function (a, b) {
+      var x = sortVal(a, k), y = sortVal(b, k);
+      if (x < y) return -1 * d;
+      if (x > y) return 1 * d;
+      return (+b.id) - (+a.id);
+    });
+    document.querySelectorAll('thead th[data-sort]').forEach(function (th) {
+      if (th.dataset.sort === k) { th.setAttribute('aria-sort', d > 0 ? 'ascending' : 'descending'); th.querySelector('.arr').textContent = d > 0 ? '▴' : '▾'; }
+      else { th.removeAttribute('aria-sort'); th.querySelector('.arr').textContent = '▾'; }
+    });
+    $('tbody').innerHTML = rows.length ? rows.map(rowHtml).join('') :
+      '<tr><td colspan="11" class="empty">' + (S.items.length ? 'No items match these filters.' : 'No items yet. Import the AXO CSV export to get started.') + '</td></tr>';
+    $('count').textContent = rows.length === S.items.length ? S.items.length + ' items' : rows.length + ' of ' + S.items.length + ' items';
+  }
+
+  function replaceRow(id, flash) {
+    var tr = document.querySelector('tr[data-id="' + CSS.escape(id) + '"]');
+    if (!tr || !S.byId[id]) return;
+    var tmp = document.createElement('tbody');
+    tmp.innerHTML = rowHtml(S.byId[id]);
+    var nr = tmp.firstChild;
+    if (flash) nr.classList.add('flash');
+    tr.replaceWith(nr);
+  }
+
+  // ------------------------------------------------------------ edits
+  function save(id, field, value) {
+    var item = S.byId[id];
+    if (!item) return;
+    var prev = item[field];
+    if (prev === value) return;
+    item[field] = value;
+    var patch = {}; patch[field] = value;
+    replaceRow(id);
+    renderKpis(); renderBreakdown();
+    busy(1);
+    return call('updateItem', id, patch, me()).then(function (fresh) {
+      busy(-1);
+      Object.assign(item, fresh);
+      replaceRow(id, true);
+      renderKpis(); renderBreakdown();
+      if (S.openId === id) fillDrawerFields(item, field);
+      if (S.openId === id) loadDetail(id);
+      return fresh;
+    }).catch(function (e) {
+      busy(-1);
+      item[field] = prev;
+      replaceRow(id);
+      renderKpis(); renderBreakdown();
+      if (S.openId === id) fillDrawerFields(item);
+      failSync(e.message);
+    });
+  }
+
+  function fieldValue(el) {
+    if (el.type === 'checkbox') return el.checked;
+    if (el.dataset.field === 'highPriority') return el.value === 'true';
+    return el.value;
+  }
+
+  // ------------------------------------------------------------ drawer
+  function openDrawer(id, focusNotes) {
+    var item = S.byId[id];
+    if (!item) { toast('AXO ' + id + ' is not in the tracker.', true); return; }
+    S.openId = id;
+    $('scrim').hidden = false;
+    $('drawer').hidden = false;
+    $('d-id').textContent = 'AXO ' + item.id;
+    $('d-type').innerHTML = '<span class="type ' + (item.itemType === 'Bug' ? 'bug' : 'story') + '">' + esc(item.itemType) + '</span>';
+    $('d-prio').className = 'prio ' + item.priority;
+    $('d-prio').textContent = item.priority || 'No priority';
+    $('d-title').textContent = item.name;
+    $('d-status').innerHTML = '<option value="">Not started</option>' + options(S.statuses.map(function (s) { return s.name; }), item.status);
+    $('d-handler').innerHTML = options(S.lists.handlers, item.handler, 'Unassigned');
+    $('d-system').innerHTML = options(S.lists.systems, item.system, '—');
+    $('d-cat').innerHTML = options(S.lists.categories, item.axoCategory, '—');
+    fillDrawerFields(item);
+    $('d-saved').textContent = '';
+    $('note-hint').textContent = me() ? 'as ' + me() : 'Pick your name in the top bar so notes are signed';
+    $('d-facts').innerHTML = [
+      ['Workflow Step', item.workflowStep], ['Priority', item.priority], ['Developer', item.developer],
+      ['Reported By', item.reportedBy], ['Release Notes', item.releaseNotes],
+      ['Last imported', item.lastImported ? fmtWhen(item.lastImported) + (item.inLatestImport ? '' : ' (not in latest export)') : 'Added by hand'],
+      ['Last updated', item.updatedAt ? fmtWhen(item.updatedAt) + ' by ' + item.updatedBy.replace(/\s*<.*>$/, '') : '']
+    ].map(function (r) { return '<dt>' + r[0] + '</dt><dd>' + (esc(r[1]) || '<span class="muted">—</span>') + '</dd>'; }).join('');
+    $('notes').innerHTML = '<li class="muted">Loading notes…</li>';
+    $('activity').innerHTML = '';
+    loadDetail(id);
+    (focusNotes ? $('note-text') : $('d-close')).focus();
+  }
+
+  function fillDrawerFields(item, skipField) {
+    ['d-status', 'd-handler', 'd-system', 'd-cat', 'd-done', 'd-hp', 'd-cdev', 'd-csed'].forEach(function (id) {
+      var el = $(id), f = el.dataset.field;
+      if (f === skipField && document.activeElement === el) return;
+      if (document.activeElement === el && el.tagName === 'TEXTAREA') return;
+      var v = item[f];
+      if (f === 'highPriority') v = v ? 'true' : 'false';
+      if (el.tagName === 'SELECT' && v && !Array.prototype.some.call(el.options, function (o) { return o.value === v; })) {
+        el.insertAdjacentHTML('beforeend', '<option>' + esc(v) + '</option>');
+      }
+      el.value = v == null ? '' : v;
+    });
+    var st = $('d-status');
+    st.setAttribute('style', statusStyle(item.status) + (item.status ? ';font-weight:700' : ''));
+  }
+
+  function loadDetail(id) {
+    return call('getItemDetail', id).then(function (d) {
+      if (S.openId !== id) return;
+      S.noteCounts[id] = d.notes.length;
+      $('notes').innerHTML = d.notes.length ? d.notes.map(noteHtml).join('') : '<li class="muted">No notes yet.</li>';
+      $('activity').innerHTML = d.activity.length ? d.activity.map(function (a) {
+        return '<li><b>' + esc(a.who.replace(/\s*<.*>$/, '')) + '</b> set ' + esc(a.field) +
+          (a.from ? ' from “' + esc(a.from) + '”' : '') + ' to “' + esc(a.to || '(blank)') + '” · ' + esc(fmtWhen(a.when)) + '</li>';
+      }).join('') : '<li>No changes recorded yet.</li>';
+    }).catch(function (e) { $('notes').innerHTML = '<li class="muted">Could not load notes: ' + esc(e.message) + '</li>'; });
+  }
+
+  function noteHtml(n) {
+    return '<li class="note k-' + esc(n.kind) + '"><div class="note-meta"><span class="note-kind">' + esc(n.kind) + '</span><b>' +
+      esc(n.author.replace(/\s*<.*>$/, '')) + '</b><span>' + esc(fmtWhen(n.createdAt)) + '</span></div><p>' + esc(n.text) + '</p></li>';
+  }
+
+  function closeDrawer() {
+    var el = document.activeElement;
+    if (el && el.tagName === 'TEXTAREA' && el.dataset.field) el.blur();
+    var id = S.openId;
+    S.openId = null;
+    $('scrim').hidden = true;
+    $('drawer').hidden = true;
+    if (id) replaceRow(id);
+  }
+
+  // ------------------------------------------------------------ import / add
+  var importText = null;
+  function pickFile(file) {
+    $('import-err').hidden = true;
+    $('import-result').hidden = true;
+    if (!file) return;
+    if (!/\.csv$/i.test(file.name)) { showErr('import-err', 'Choose the .csv export from AXO.'); return; }
+    var r = new FileReader();
+    r.onload = function () {
+      importText = String(r.result);
+      var lines = importText.split(/\r?\n/).filter(function (l) { return l.trim(); }).length - 1;
+      $('drop-title').textContent = file.name;
+      $('drop-sub').textContent = 'About ' + Math.max(lines, 0) + ' rows. Click Import to load them.';
+      $('import-go').disabled = false;
+    };
+    r.readAsText(file);
+  }
+  function showErr(id, msg) { $(id).textContent = msg; $(id).hidden = false; }
+
+  function runImport() {
+    if (!importText) return;
+    $('import-go').disabled = true;
+    $('import-go').textContent = 'Importing…';
+    call('importCsv', importText, me()).then(function (res) {
+      $('import-result').hidden = false;
+      $('import-result').innerHTML = '<b>' + res.added + '</b> new, <b>' + res.updated + '</b> updated, ' + res.unchanged + ' unchanged' +
+        (res.dropped ? ', ' + res.dropped + ' no longer in the export (kept, flagged)' : '') + '.';
+      importText = null;
+      $('import-go').textContent = 'Import';
+      $('drop-title').textContent = 'Drop another CSV or click to choose';
+      return load(false);
+    }).catch(function (e) {
+      $('import-go').disabled = false;
+      $('import-go').textContent = 'Import';
+      showErr('import-err', e.message);
+    });
+  }
+
+  function openAdd() {
+    $('add-err').hidden = true;
+    $('add-form').reset();
+    $('a-cat').innerHTML = options(S.lists.categories, '', '—');
+    $('a-handler').innerHTML = options(S.lists.handlers, me(), 'Unassigned');
+    $('a-system').innerHTML = options(S.lists.systems, '', '—');
+    $('add-dlg').showModal();
+  }
+
+  // ------------------------------------------------------------ events
+  function bind() {
+    $('me-select').addEventListener('change', function (e) {
+      setMe(e.target.value);
+      if ($('f-handler').value === '__me') renderTable();
+      toast(e.target.value ? 'Notes and edits will be signed as ' + e.target.value : 'Name cleared');
+    });
+
+    FILTER_IDS.forEach(function (id) {
+      $(id).addEventListener(id === 'f-q' ? 'input' : 'change', function () { saveFilters(); renderTable(); renderKpis(); });
+    });
+    $('f-clear').addEventListener('click', function () {
+      FILTER_IDS.forEach(function (id) { var el = $(id); if (el.type === 'checkbox') el.checked = false; else el.value = ''; });
+      saveFilters(); renderTable(); renderKpis();
+    });
+
+    $('kpis').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-kpi]');
+      if (!b) return;
+      var k = b.dataset.kpi;
+      $('f-hp').checked = k === 'hp';
+      $('f-handler').value = k === 'unassigned' ? '__none' : '';
+      $('f-status').value = k.indexOf('g:') === 0 ? k : (k === 'hp' || k === 'unassigned' ? '__open' : '');
+      saveFilters(); renderTable(); renderKpis();
+    });
+
+    function statusClick(e) {
+      var b = e.target.closest('[data-status]');
+      if (!b) return;
+      $('f-status').value = b.dataset.status ? 's:' + b.dataset.status : 'g:Not Started';
+      saveFilters(); renderTable(); renderKpis();
+    }
+    $('stack').addEventListener('click', statusClick);
+    $('legend').addEventListener('click', statusClick);
+
+    document.querySelector('thead').addEventListener('click', function (e) {
+      var th = e.target.closest('th[data-sort]');
+      if (!th) return;
+      var k = th.dataset.sort;
+      S.sort = { key: k, dir: S.sort.key === k ? -S.sort.dir : (k === 'id' || k === 'notes' || k === 'priority' || k === 'highPriority' ? -1 : 1) };
+      renderTable();
+    });
+
+    var tbody = $('tbody');
+    tbody.addEventListener('change', function (e) {
+      var el = e.target, tr = el.closest('tr[data-id]');
+      if (!tr || !el.dataset.field) return;
+      save(tr.dataset.id, el.dataset.field, fieldValue(el));
+    });
+    tbody.addEventListener('click', function (e) {
+      var o = e.target.closest('[data-open]');
+      if (o) openDrawer(o.dataset.open, o.dataset.focus === 'notes');
+    });
+
+    // Drawer fields: selects/date save on change, textareas on blur.
+    ['d-status', 'd-handler', 'd-system', 'd-cat', 'd-done', 'd-hp'].forEach(function (id) {
+      $(id).addEventListener('change', function (e) { drawerSave(e.target); });
+    });
+    ['d-cdev', 'd-csed'].forEach(function (id) {
+      $(id).addEventListener('blur', function (e) { drawerSave(e.target); });
+    });
+    function drawerSave(el) {
+      var id = S.openId;
+      if (!id) return;
+      var f = el.dataset.field, v = fieldValue(el);
+      if (S.byId[id][f] === v) return;
+      $('d-saved').textContent = 'Saving…';
+      var p = save(id, f, v);
+      if (p) p.then(function (r) { if (r && S.openId === id) $('d-saved').textContent = 'Saved'; });
+    }
+
+    $('d-close').addEventListener('click', closeDrawer);
+    $('scrim').addEventListener('click', closeDrawer);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !$('drawer').hidden && !document.querySelector('dialog[open]')) closeDrawer();
+    });
+
+    $('note-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var id = S.openId, text = $('note-text').value.trim(), kind = $('note-kind').value;
+      if (!id || !text) return;
+      $('note-add').disabled = true;
+      busy(1);
+      call('addNote', id, kind, text, me()).then(function (note) {
+        busy(-1);
+        $('note-add').disabled = false;
+        $('note-text').value = '';
+        S.noteCounts[id] = (S.noteCounts[id] || 0) + 1;
+        var list = $('notes');
+        if (list.querySelector('.muted')) list.innerHTML = '';
+        list.insertAdjacentHTML('afterbegin', noteHtml(note));
+        if (kind === 'Blocker') toast('Blocker note added' + (S.slack ? ' and posted to Slack' : ''));
+      }).catch(function (err) {
+        busy(-1);
+        $('note-add').disabled = false;
+        failSync(err.message);
+      });
+    });
+    $('note-text').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) $('note-form').requestSubmit();
+    });
+
+    // Import dialog
+    $('import-btn').addEventListener('click', function () {
+      importText = null;
+      $('import-go').disabled = true;
+      $('import-err').hidden = true; $('import-result').hidden = true;
+      $('drop-title').textContent = 'Drop the CSV here or click to choose';
+      $('drop-sub').textContent = 'Item Type is mapped on import: defects → Bug, features → User Story';
+      $('import-dlg').showModal();
+    });
+    $('import-cancel').addEventListener('click', function () { $('import-dlg').close(); });
+    $('import-go').addEventListener('click', runImport);
+    var drop = $('drop');
+    drop.addEventListener('click', function () { $('file').click(); });
+    drop.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('file').click(); } });
+    $('file').addEventListener('change', function (e) { pickFile(e.target.files[0]); e.target.value = ''; });
+    ['dragenter', 'dragover'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.add('over'); }); });
+    ['dragleave', 'drop'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.remove('over'); }); });
+    drop.addEventListener('drop', function (e) { pickFile(e.dataTransfer.files[0]); });
+
+    // Add dialog
+    $('add-btn').addEventListener('click', openAdd);
+    $('add-cancel').addEventListener('click', function () { $('add-dlg').close(); });
+    $('add-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var item = {
+        id: $('a-id').value.trim(), itemType: $('a-type').value, name: $('a-name').value.trim(),
+        axoCategory: $('a-cat').value, priority: $('a-prio').value, handler: $('a-handler').value, system: $('a-system').value,
+        highPriority: $('a-prio').value === 'High'
+      };
+      call('addItem', item, me()).then(function (rec) {
+        $('add-dlg').close();
+        S.items.push(rec); S.byId[rec.id] = rec;
+        render();
+        toast('AXO ' + rec.id + ' added');
+      }).catch(function (err) { showErr('add-err', err.message); });
+    });
+
+    // Pick up teammates' changes every minute while the tab is visible and idle.
+    setInterval(function () {
+      if (document.hidden || S.pending || document.querySelector('dialog[open]')) return;
+      var a = document.activeElement;
+      if (a && (a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || (a.tagName === 'INPUT' && a.type !== 'search'))) return;
+      if (Date.now() - S.loadedAt < 55000) return;
+      $('sync').className = 'sync busy'; $('sync-text').textContent = 'Refreshing';
+      load(false).catch(function () { $('sync').className = 'sync err'; $('sync-text').textContent = 'Offline'; });
+    }, 15000);
+  }
+
+  // ------------------------------------------------------------ start
+  bind();
+  load(true).then(function () {
+    if (google.script.url && google.script.url.getLocation) {
+      google.script.url.getLocation(function (loc) {
+        var axo = loc && loc.parameter && loc.parameter.axo;
+        if (axo) openDrawer(String(axo));
+      });
+    }
+  }).catch(function (e) {
+    $('tbody').innerHTML = '<tr><td colspan="11" class="empty">Could not load the tracker: ' + esc(e.message) + '</td></tr>';
+    failSync(e.message);
+  });
+})();
+</script>

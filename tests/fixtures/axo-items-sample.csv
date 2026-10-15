@@ -1,0 +1,7 @@
+﻿"ID","Item Type","Name","Workflow Step","Workflow Step Order","Workflow Step ID","Priority","Priority Order","Priority ID","Non-technical description for Release Notes","Non-technical description for Release Notes","Developer","Developer","Reported By","Reported By ID",
+"20001","defects","SERPCAR FedEx REST: Sample rate issue, with comma","6. Add Test Cases","8","136","High","3","1","","","Dev One","","Reporter A","1",
+"20002","defects","ERPIS UPS REST: Sample  label   issue","1. New","1","130","Medium","2","3","Short ""quoted"" note","","Dev Two","","Reporter B","2",
+"20003","features","SERPCAR DHLX: Sample user story","6. Add Test Cases","8","136","Medium","2","3","","","","Dev Three","Reporter A","1",
+"20004","features","SERPC: Sample framework story","2. Approved ","2","131","","0","0","","","","","","0",
+"20005","defects","PRLA_HTTPPOST Sample uncategorised item","9. Release TR","11","139","Low","1","2","Multi
+line","","Dev One","","Reporter C","3",
