@@ -30,8 +30,8 @@ function onOpen() {
   SpreadsheetApp.getUi().createMenu('CCQA Tracker')
     .addItem('Set up / repair sheets', 'setup')
     .addItem('Send Slack test message', 'testSlack')
-    .addItem('Send daily digest now', 'sendDailyDigest')
-    .addItem('Install daily digest trigger', 'installTriggers')
+    .addItem('Send weekly digest now', 'sendWeeklyDigest')
+    .addItem('Install weekly digest trigger (Tue 5 AM)', 'installTriggers')
     .addToUi();
 }
 

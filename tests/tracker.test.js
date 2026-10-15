@@ -143,7 +143,7 @@ test('Slack: status pings, blocker notes and import summaries', () => {
   assert.strictEqual(slackPosts.length, 3);
   assert.match(slackPosts[2].blocks[0].text.text, /creds &lt;expired&gt;/);
 
-  assert.strictEqual(ctx.sendDailyDigest(), true);
+  assert.strictEqual(ctx.sendWeeklyDigest(), true);
   assert.strictEqual(slackPosts[3].blocks[0].type, 'header');
 });
 

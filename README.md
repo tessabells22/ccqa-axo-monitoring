@@ -9,7 +9,7 @@ Web app for the Carrier Compliance QA team to track AXO items, built the same wa
 - **Dev and BA** are shown under every item name. BA is the AXO export's "Reported By" column.
 - **Review points**: setting an item to Review Points opens a box for the reviewing QA to write the points. They're saved on the item and sent to the handler as a Slack DM.
 - **Notes**: every item has a timestamped, signed notes thread (General, DEV, SED, Blocker) plus a change history.
-- **Slack**: optional channel pings for key status changes, blocker notes, imports and a weekday digest.
+- **Slack**: optional channel pings for key status changes, blocker notes, imports and a weekly digest (Tuesdays, 5 AM Manila).
 
 ## Columns
 
@@ -72,7 +72,7 @@ Back it up anyway: in the Sheet, **File → Version history** is automatic. For 
 3. In Apps Script: **Project Settings → Script properties → Add**:
    - `SLACK_WEBHOOK_URL` = the webhook URL
    - `APP_URL` = the web app `/exec` URL (so messages link straight to the item)
-4. Run `testSlack`, then `installTriggers` for the digest.
+4. Run `testSlack`, then `installTriggers` to schedule the weekly digest. Apps Script fires it some time between 5:00 and 6:00 AM on Tuesday; run `sendWeeklyDigest` to see one now.
 5. Set up review point DMs (next section).
 
 ### Review point DMs
@@ -133,7 +133,7 @@ The tracker falls back to posting the points in the channel with an @mention, an
 | An item is flagged High Priority, or a handler is assigned | Assignee gets @mentioned. |
 | A **Blocker** note is added | Blockers shouldn't wait for someone to open the tracker. Other note types stay in the tracker. |
 | An import adds new items | Lists any new high-priority AXOs. |
-| Weekday digest at 9 AM (Manila) | Counts by status, high-priority items with no handler, and items stuck in Awaiting BA/DEV for 2+ days. |
+| Weekly digest, Tuesdays at 5 AM (Manila) | Counts by status, high-priority items with no handler, and items stuck in Awaiting BA/DEV for 2+ days. |
 
 Ongoing QA and minor edits are deliberately quiet: a channel that pings on every dropdown change gets muted within a week.
 

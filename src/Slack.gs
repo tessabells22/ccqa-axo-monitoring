@@ -129,8 +129,8 @@ function onImported_(summary, actorName) {
   slackPost_({ text: text.replace(/\*/g, ''), blocks: [{ type: 'section', text: { type: 'mrkdwn', text: text } }] });
 }
 
-/** Morning summary. Install with installTriggers(). */
-function sendDailyDigest() {
+/** Weekly summary, Tuesdays 5 AM. Install with installTriggers(). */
+function sendWeeklyDigest() {
   var items = readItems_().rows.map(function (r) { return rowToItem_(r.values); });
   var groups = { 'Not Started': 0, 'In Progress': 0, 'Completed': 0, 'Discarded': 0 };
   var byStatus = {};
@@ -150,7 +150,7 @@ function sendDailyDigest() {
       (arr.length > 10 ? '\n…and ' + (arr.length - 10) + ' more' : '');
   };
   var blocks = [
-    { type: 'header', text: { type: 'plain_text', text: 'CCQA AXO digest · ' + Utilities.formatDate(new Date(), TZ, 'EEE d MMM') } },
+    { type: 'header', text: { type: 'plain_text', text: 'CCQA AXO weekly digest · ' + Utilities.formatDate(new Date(), TZ, 'EEE d MMM') } },
     { type: 'section', fields: [
       { type: 'mrkdwn', text: '*Not started*\n' + groups['Not Started'] },
       { type: 'mrkdwn', text: '*In progress*\n' + groups['In Progress'] },
@@ -163,17 +163,21 @@ function sendDailyDigest() {
   if (waiting.length) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Awaiting BA/DEV for 2+ days (' + waiting.length + ')*\n' + list(waiting) } });
   var cfg = slackConfig_();
   if (cfg.appUrl) blocks.push({ type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Open tracker' }, url: cfg.appUrl }] });
-  return slackPost_({ text: 'CCQA AXO digest: ' + open.length + ' open items', blocks: blocks });
+  return slackPost_({ text: 'CCQA AXO weekly digest: ' + open.length + ' open items', blocks: blocks });
 }
 
-/** Weekdays at 9 AM in the script time zone. Re-running replaces the old trigger. */
+/**
+ * Every Tuesday at 5 AM in the script time zone (Asia/Manila). Apps Script runs an
+ * hourly trigger at some point inside that hour, so expect it between 5:00 and 6:00.
+ * Re-running replaces any earlier digest trigger, including the old daily one.
+ */
 function installTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'sendDailyDigest') ScriptApp.deleteTrigger(t);
+    var fn = t.getHandlerFunction();
+    if (fn === 'sendWeeklyDigest' || fn === 'sendDailyDigest') ScriptApp.deleteTrigger(t);
   });
-  [ScriptApp.WeekDay.MONDAY, ScriptApp.WeekDay.TUESDAY, ScriptApp.WeekDay.WEDNESDAY, ScriptApp.WeekDay.THURSDAY, ScriptApp.WeekDay.FRIDAY]
-    .forEach(function (d) { ScriptApp.newTrigger('sendDailyDigest').timeBased().onWeekDay(d).atHour(9).create(); });
-  return 'Daily digest scheduled for weekdays at 9 AM (' + TZ + ')';
+  ScriptApp.newTrigger('sendWeeklyDigest').timeBased().onWeekDay(ScriptApp.WeekDay.TUESDAY).atHour(5).create();
+  return 'Weekly digest scheduled for Tuesdays at 5 AM (' + TZ + ')';
 }
 
 function testSlack() {
