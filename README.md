@@ -72,9 +72,57 @@ Back it up anyway: in the Sheet, **File → Version history** is automatic. For 
 3. In Apps Script: **Project Settings → Script properties → Add**:
    - `SLACK_WEBHOOK_URL` = the webhook URL
    - `APP_URL` = the web app `/exec` URL (so messages link straight to the item)
-   - `SLACK_BOT_TOKEN` = the app's **Bot User OAuth Token** (`xoxb-…`), needed for review-point DMs. In the same Slack app: **OAuth & Permissions → Bot Token Scopes → add `chat:write`**, then **Install to Workspace**. Also turn on **App Home → Messages Tab** so people can see the DMs.
 4. Run `testSlack`, then `installTriggers` for the digest.
-5. In the **Lists** tab, put each handler's Slack member ID (Slack profile → ⋯ → *Copy member ID*) in the **Handler Slack ID** column on the same row. Review points need this to DM the handler; channel pings use it to @mention them.
+5. Set up review point DMs (next section).
+
+### Review point DMs
+
+Review points go to the handler as a direct message from the Slack app. A webhook can only post to its one channel, so DMs need a **bot token** plus each handler's **Slack member ID**. Use the same Slack app you made for the webhook.
+
+**1. Give the app permission to send messages**
+
+1. Open <https://api.slack.com/apps> and pick the tracker's app.
+2. **OAuth & Permissions → Scopes → Bot Token Scopes → Add an OAuth Scope** → add `chat:write`.
+3. Scroll up and click **Install to Workspace** (or **Reinstall to Workspace** if it's already installed) and approve. A scope only takes effect after a (re)install. If your workspace requires admin approval for apps, this step goes to a Slack admin.
+4. Copy the **Bot User OAuth Token** shown on that page. It starts with `xoxb-`.
+
+**2. Let people see the app's messages**
+
+**App Home → Show Tabs** → turn on **Messages Tab**. The DMs land in the app's conversation in each person's Slack sidebar under *Apps*.
+
+**3. Save the token in Apps Script**
+
+**Project Settings → Script properties → Add script property**: `SLACK_BOT_TOKEN` = the `xoxb-` token. Keep it only here: don't paste it in the sheet, the code, or a chat. Anyone with edit access to the Apps Script project can read script properties, so keep that list to the people who maintain the tracker.
+
+**4. Map handlers to their Slack accounts**
+
+For each QA, open their Slack profile → **⋮ (More)** → **Copy member ID** (looks like `U04ABCDE12`). In the sheet's **Lists** tab, paste it in the **Handler Slack ID** column on the **same row** as their name in the **Handler** column:
+
+| Handler | … | Handler Slack ID |
+| --- | --- | --- |
+| Ley - QA | | U04ABCDE12 |
+| Tessa - QA | | U05FGHIJ34 |
+
+New team member: add their name to **Handler** and their ID beside it. Reload the tracker so it picks up the change. The same IDs make channel posts @mention the handler.
+
+**5. Test it on yourself**
+
+1. In the tracker, pick your own name in the top bar and assign any AXO to yourself as handler.
+2. Set its status to **Review Points**. The box should say *Sent to [your name] as a Slack DM*. If it says the handler can't be DMed, it names what's missing (token or Slack ID).
+3. Write a test point and send. You should get a DM from the app within a few seconds.
+4. Put the AXO back to its real status and delete the test note row from the **Notes** tab.
+
+**If the DM doesn't arrive**
+
+The tracker falls back to posting the points in the channel with an @mention, and the toast says so. The reason is in Apps Script → **Executions** → the latest `setReviewPoints` run → a log line starting `Slack DM failed:`.
+
+| Error in the log | Fix |
+| --- | --- |
+| `invalid_auth` or `not_authed` | The token is wrong or was revoked. Copy it again from **OAuth & Permissions** into `SLACK_BOT_TOKEN`. |
+| `missing_scope` | `chat:write` is missing, or the app wasn't reinstalled after adding it. Redo step 1. |
+| `channel_not_found` or `user_not_found` | The member ID in **Lists** is wrong, or it's on a different row from the handler's name. |
+| No log line, toast says "no Slack ID for handler" | The handler's row in **Lists** has no ID, or the name in **Handler** doesn't match the name on the item exactly. |
+| `account_inactive` | The person was deactivated in Slack. Remove or update their row. |
 
 ### What gets posted
 
