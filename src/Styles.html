@@ -8,6 +8,8 @@
   --line:#dde5ee; --line-strong:#c5d1de;
   --brand:#0F6EC8; --brand-ink:#ffffff; --sky:#059BD7; --orange:#F19305; --brand-soft:#e6f0fa;
   --ok:#1a8a4a; --warn:#b86e00; --bad:#c2372f; --bad-soft:#fbeceb;
+  --dev:#0369A1; --ba:#B4510A;
+  --wf-new:#64748B; --wf-approved:#2563EB; --wf-dev:#A16207; --wf-rework:#C2410C; --wf-review:#7C3AED; --wf-cases:#0F766E; --wf-ready:#15803D; --wf-file:#BE185D; --wf-release:#1E3A8A; --wf-rejected:#B91C1C;
   --shadow:0 1px 2px rgba(20,32,44,.06),0 4px 16px rgba(20,32,44,.06);
   --display:"Geist",system-ui,sans-serif; --body:"Geist",system-ui,sans-serif; --mono:"Geist Mono",ui-monospace,monospace;
   color-scheme:light;
@@ -17,12 +19,16 @@
   --line:#26374a; --line-strong:#34485e;
   --brand:#4a9be6; --brand-ink:#0b1622; --sky:#3bb6ea; --orange:#f5a733; --brand-soft:#16304a;
   --ok:#4cc27e; --warn:#f0a83a; --bad:#ef6a62; --bad-soft:#3a1d1c;
+  --dev:#38BDF8; --ba:#F5A733;
+  --wf-new:#94A3B8; --wf-approved:#60A5FA; --wf-dev:#FACC15; --wf-rework:#FB923C; --wf-review:#A78BFA; --wf-cases:#2DD4BF; --wf-ready:#4ADE80; --wf-file:#F472B6; --wf-release:#A5B4FC; --wf-rejected:#F87171;
   --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.3); color-scheme:dark}}
 :root[data-theme="dark"]{
   --bg:#0e1620; --surface:#15202c; --surface-2:#1b2836; --fg:#e4ebf2; --muted:#94a3b4; --faint:#6f7f91;
   --line:#26374a; --line-strong:#34485e;
   --brand:#4a9be6; --brand-ink:#0b1622; --sky:#3bb6ea; --orange:#f5a733; --brand-soft:#16304a;
   --ok:#4cc27e; --warn:#f0a83a; --bad:#ef6a62; --bad-soft:#3a1d1c;
+  --dev:#38BDF8; --ba:#F5A733;
+  --wf-new:#94A3B8; --wf-approved:#60A5FA; --wf-dev:#FACC15; --wf-rework:#FB923C; --wf-review:#A78BFA; --wf-cases:#2DD4BF; --wf-ready:#4ADE80; --wf-file:#F472B6; --wf-release:#A5B4FC; --wf-rejected:#F87171;
   --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.3); color-scheme:dark}
 
 *{box-sizing:border-box}
@@ -134,11 +140,22 @@ tbody tr.flash td{animation:flash 1.2s ease-out}
 .c-name{min-width:300px;max-width:520px}
 .c-name .nm{font-weight:500;display:block;cursor:pointer}
 .c-name .nm:hover{color:var(--brand)}
-.c-name .sub{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+.c-name .sub{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:12px;color:var(--muted);margin-top:5px}
 .c-name .gone{color:var(--warn)}
 .people{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:5px;font-size:12.5px}
 .people span{display:inline-flex;align-items:baseline;gap:5px;color:var(--fg)}
-.people em{font-style:normal;font:600 10px/1 var(--body);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:var(--surface-2);border-radius:4px;padding:3px 5px}
+.people em{font-style:normal;font:700 10px/1 var(--body);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:var(--surface-2);border-radius:4px;padding:3px 5px}
+.people em.dev{color:var(--dev);background:color-mix(in srgb,var(--dev) 14%,transparent)}
+.people em.ba{color:var(--ba);background:color-mix(in srgb,var(--ba) 14%,transparent)}
+/* workflow step chip: colour follows the AXO workflow stage */
+.wf{--c:var(--muted);display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;line-height:1.3;color:var(--c);
+  background:color-mix(in srgb,var(--c) 11%,transparent);border-radius:999px;padding:2px 9px 2px 8px;white-space:nowrap}
+.wf::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--c);flex:none}
+.wf-new{--c:var(--wf-new)} .wf-approved{--c:var(--wf-approved)} .wf-dev{--c:var(--wf-dev)} .wf-rework{--c:var(--wf-rework)}
+.wf-review{--c:var(--wf-review)} .wf-cases{--c:var(--wf-cases)} .wf-ready{--c:var(--wf-ready)} .wf-file{--c:var(--wf-file)}
+.wf-release{--c:var(--wf-release)} .wf-rejected{--c:var(--wf-rejected)}
+.help-link{font-size:13.5px;font-weight:500;color:var(--brand);text-decoration:none;padding:7px 4px;white-space:nowrap}
+.help-link:hover{text-decoration:underline}
 .people .none{color:var(--faint)}
 .q-tag{display:block;font-size:11px;color:var(--faint);margin-top:3px;white-space:nowrap}
 .type{display:inline-block;font:500 11.5px/1 var(--body);padding:4px 8px;border-radius:999px;border:1px solid currentColor;white-space:nowrap}

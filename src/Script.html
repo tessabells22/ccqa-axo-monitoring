@@ -280,8 +280,8 @@
 
   function rowHtml(i) {
     var n = S.noteCounts[i.id] || 0;
-    var sub = esc(i.workflowStep);
-    if (!i.inLatestImport && i.lastImported) sub += ' · <span class="gone">not in latest export</span>';
+    var sub = wfChip(i.workflowStep);
+    if (!i.inLatestImport && i.lastImported) sub += '<span class="gone">not in latest export</span>';
     var stOpts = '<option value="">Not started</option>' + S.statuses.map(function (s) {
       return '<option' + (s.name === i.status ? ' selected' : '') + '>' + esc(s.name) + '</option>';
     }).join('');
@@ -301,9 +301,23 @@
       '</tr>';
   }
 
+  // Colour by AXO workflow stage: "1. New", "4B. Development In Progress", "Rejected", ...
+  function wfClass(step) {
+    var s = String(step || '').toLowerCase();
+    if (!s) return '';
+    if (s.indexOf('reject') >= 0) return 'wf-rejected';
+    if (s.indexOf('rework') >= 0 || /^4\.?\s*a\b/.test(s)) return 'wf-rework';
+    var n = parseInt(s, 10);
+    return { 1: 'wf-new', 2: 'wf-approved', 3: 'wf-approved', 4: 'wf-dev', 5: 'wf-review', 6: 'wf-cases',
+      7: 'wf-ready', 8: 'wf-file' }[n] || (n >= 9 ? 'wf-release' : '');
+  }
+  function wfChip(step) {
+    return step ? '<span class="wf ' + wfClass(step) + '">' + esc(step) + '</span>' : '';
+  }
+
   function peopleHtml(i) {
     var who = function (label, name) {
-      return '<span><em>' + label + '</em>' + (name ? esc(name) : '<span class="none">Not set</span>') + '</span>';
+      return '<span><em class="' + label.toLowerCase() + '">' + label + '</em>' + (name ? esc(name) : '<span class="none">Not set</span>') + '</span>';
     };
     return '<div class="people">' + who('Dev', i.developer) + who('BA', i.reportedBy) + '</div>';
   }
@@ -407,7 +421,10 @@
       ['BA', item.reportedBy], ['Release Notes', item.releaseNotes],
       ['Last imported', item.lastImported ? fmtWhen(item.lastImported) + (item.inLatestImport ? '' : ' (not in latest export)') : 'Added by hand'],
       ['Last updated', item.updatedAt ? fmtWhen(item.updatedAt) + ' by ' + item.updatedBy.replace(/\s*<.*>$/, '') : '']
-    ].map(function (r) { return '<dt>' + r[0] + '</dt><dd>' + (esc(r[1]) || '<span class="muted">—</span>') + '</dd>'; }).join('');
+    ].map(function (r) {
+      var v = r[0] === 'Workflow Step' ? wfChip(r[1]) : esc(r[1]);
+      return '<dt>' + r[0] + '</dt><dd>' + (v || '<span class="muted">—</span>') + '</dd>';
+    }).join('');
     $('notes').innerHTML = '<li class="muted">Loading notes…</li>';
     $('activity').innerHTML = '';
     loadDetail(id);
