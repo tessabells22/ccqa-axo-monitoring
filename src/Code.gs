@@ -5,10 +5,14 @@
  *   Items     one row per AXO item; CSV columns + QA tracking columns
  *   Notes     append-only team notes, one row per note
  *   Activity  audit trail of every field change and import
- *   Lists     dropdown values (handlers, systems, categories) the team can edit
+ *   Lists     dropdown values (handlers, systems, categories), Slack IDs and email recipients
+ *   Deleted   AXOs removed from the tracker, kept so they can be restored
  */
 
-var SHEETS = { items: 'Items', notes: 'Notes', activity: 'Activity', lists: 'Lists' };
+var SHEETS = { items: 'Items', notes: 'Notes', activity: 'Activity', lists: 'Lists', deleted: 'Deleted' };
+/** Bump when setup() must run again on an existing sheet (new columns or tabs). */
+var SCHEMA_VERSION = '3';
+var LIST_EXTRA_COLUMNS = ['Handler Slack ID', 'Email To', 'Email CC'];
 var TZ = Session.getScriptTimeZone() || 'Asia/Manila';
 
 // ---------------------------------------------------------------- web app
@@ -29,9 +33,13 @@ function include(name) {
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('CCQA Tracker')
     .addItem('Set up / repair sheets', 'setup')
+    .addItem('Restore selected rows (Deleted tab)', 'restoreSelectedDeleted')
+    .addSeparator()
+    .addItem('Check Slack setup', 'checkSlackSetupMenu')
     .addItem('Send Slack test message', 'testSlack')
     .addItem('Send weekly digest now', 'sendWeeklyDigest')
-    .addItem('Install weekly digest trigger (Tue 5 AM)', 'installTriggers')
+    .addItem('Send 2-day nudges now', 'sendNudges')
+    .addItem('Install schedules (digest + nudges)', 'installTriggers')
     .addToUi();
 }
 
@@ -54,10 +62,11 @@ function setup() {
   var items = ensureSheet_(ss, SHEETS.items, ITEM_COLUMNS.map(function (c) { return c.header; }));
   ensureSheet_(ss, SHEETS.notes, NOTE_COLUMNS);
   ensureSheet_(ss, SHEETS.activity, ACTIVITY_COLUMNS);
+  ensureSheet_(ss, SHEETS.deleted, deletedColumns_());
   var lists = ss.getSheetByName(SHEETS.lists);
   if (!lists) {
     lists = ss.insertSheet(SHEETS.lists);
-    var names = Object.keys(DEFAULT_LISTS).concat(['Handler Slack ID']);
+    var names = Object.keys(DEFAULT_LISTS);
     lists.getRange(1, 1, 1, names.length).setValues([names]).setFontWeight('bold');
     names.forEach(function (n, i) {
       var vals = DEFAULT_LISTS[n] || [];
@@ -65,8 +74,66 @@ function setup() {
     });
     lists.setFrozenRows(1);
   }
+  // Columns added in later versions go to the right of whatever the team already has.
+  var head = lists.getRange(1, 1, 1, Math.max(lists.getLastColumn(), 1)).getValues()[0];
+  LIST_EXTRA_COLUMNS.forEach(function (h) {
+    if (head.indexOf(h) >= 0) return;
+    head.push(h);
+    lists.getRange(1, head.length).setValue(h).setFontWeight('bold');
+  });
   formatItems_(items);
+  backfillStatusSince_(items);
+  PropertiesService.getScriptProperties().setProperty('SCHEMA_VERSION', SCHEMA_VERSION);
   return 'Setup complete';
+}
+
+/** Runs setup() once after an update that changed the sheet layout, so nobody has to remember to. */
+function ensureSchema_() {
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('SCHEMA_VERSION') === SCHEMA_VERSION) return;
+  withLock_(function () {
+    if (props.getProperty('SCHEMA_VERSION') !== SCHEMA_VERSION) setup();
+  });
+}
+
+function deletedColumns_() {
+  return ITEM_COLUMNS.map(function (c) { return c.header; }).concat(['Deleted By', 'Deleted At']);
+}
+
+/**
+ * Rows from before "Status Since" existed get the time of their last Status change
+ * from the Activity log, or else their last update.
+ */
+function backfillStatusSince_(sh) {
+  var data = readItems_();
+  var col = colIndex_();
+  var missing = data.rows.filter(function (r) { return !r.values[col.statusSince]; });
+  if (!missing.length) return;
+  var lastChange = {}, hpEdited = {};
+  var ash = sheet_(SHEETS.activity);
+  if (ash.getLastRow() > 1) {
+    ash.getRange(2, 1, ash.getLastRow() - 1, ACTIVITY_COLUMNS.length).getValues().forEach(function (r) {
+      if (String(r[3]) === 'Status' && r[0]) lastChange[String(r[2])] = r[0];
+      if (String(r[3]) === 'High Priority') hpEdited[String(r[2])] = true;
+    });
+  }
+  var now = new Date();
+  var time = function (v) { return Object.prototype.toString.call(v) === '[object Date]' ? v.getTime() : 0; };
+  var latestImport = Math.max.apply(null, data.rows.map(function (r) { return time(r.values[col.lastImported]); }).concat([0]));
+  missing.forEach(function (r) {
+    var when = lastChange[String(r.values[0])] || r.values[col.updatedAt] || r.values[col.lastImported] || now;
+    sh.getRange(r.rowNum, col.statusSince + 1).setValue(when);
+    // Earlier versions unticked both checkbox columns on newly imported rows by mistake.
+    // Put High Priority back for High-priority AXOs nobody has changed by hand, and
+    // "In Latest Import" back for rows that were in the most recent import.
+    if (r.values[col.priority] === 'High' && r.values[col.highPriority] !== true && !hpEdited[String(r.values[0])]) {
+      sh.getRange(r.rowNum, col.highPriority + 1).setValue(true);
+    }
+    var imported = time(r.values[col.lastImported]);
+    if (imported && latestImport - imported < 60000 && r.values[col.inLatestImport] !== true) {
+      sh.getRange(r.rowNum, col.inLatestImport + 1).setValue(true);
+    }
+  });
 }
 
 function ensureSheet_(ss, name, headers) {
@@ -96,7 +163,8 @@ function formatItems_(sh) {
 
   var widths = { id: 70, itemType: 90, name: 520, workflowStep: 170, priority: 75, developer: 170, reportedBy: 170,
     releaseNotes: 260, quarter: 90, highPriority: 95, axoCategory: 100, system: 100, handler: 120, status: 130,
-    completedOn: 120, commentDev: 420, commentSed: 300, updatedBy: 150, updatedAt: 150, lastImported: 150, inLatestImport: 110 };
+    completedOn: 120, commentDev: 420, commentSed: 300, updatedBy: 150, updatedAt: 150, lastImported: 150, inLatestImport: 110,
+    statusSince: 150, lastNudged: 110 };
   Object.keys(widths).forEach(function (k) { sh.setColumnWidth(col[k] + 1, widths[k]); });
 
   var body = function (k) { return sh.getRange(2, col[k] + 1, maxRows - 1, 1); };
@@ -107,8 +175,7 @@ function formatItems_(sh) {
     return SpreadsheetApp.newDataValidation()
       .requireValueInRange(lists.getRange(2, idx + 1, 200, 1), true).setAllowInvalid(true).build();
   };
-  // Checkboxes only on rows that hold data: an unchecked box counts as content and
-  // would push getLastRow() to the bottom of the sheet.
+  // Checkboxes only on rows that hold data, so empty rows stay truly empty.
   checkboxes_(sh, 2, firstFreeRow_(sh) - 2);
   ['axoCategory', 'system', 'handler'].forEach(function (k) {
     var header = { axoCategory: 'AXO Category', system: 'System', handler: 'Handler' }[k];
@@ -124,6 +191,8 @@ function formatItems_(sh) {
   body('completedOn').setNumberFormat('yyyy-mm-dd');
   body('updatedAt').setNumberFormat('yyyy-mm-dd hh:mm');
   body('lastImported').setNumberFormat('yyyy-mm-dd hh:mm');
+  body('statusSince').setNumberFormat('yyyy-mm-dd hh:mm');
+  body('lastNudged').setNumberFormat('yyyy-mm-dd');
   body('name').setWrap(true);
   body('commentDev').setWrap(true);
   body('commentSed').setWrap(true);
@@ -169,11 +238,26 @@ function firstFreeRow_(sh) {
   return 2;
 }
 
+/** Grows the sheet so rows up to `lastRow` exist; getRange() throws past the last row. */
+function ensureRows_(sh, lastRow) {
+  var max = sh.getMaxRows();
+  if (lastRow > max) sh.insertRowsAfter(max, lastRow - max + 50);
+}
+
+function today_() {
+  return Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
+}
+
+/**
+ * Shows the two TRUE/FALSE columns as checkboxes. This uses a validation rule, not
+ * insertCheckboxes(): that call resets every cell in the range to FALSE.
+ */
 function checkboxes_(sh, startRow, count) {
   if (count < 1) return;
   var col = colIndex_();
-  sh.getRange(startRow, col.highPriority + 1, count, 1).insertCheckboxes();
-  sh.getRange(startRow, col.inLatestImport + 1, count, 1).insertCheckboxes();
+  var rule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+  sh.getRange(startRow, col.highPriority + 1, count, 1).setDataValidation(rule);
+  sh.getRange(startRow, col.inLatestImport + 1, count, 1).setDataValidation(rule);
 }
 
 function withLock_(fn) {
@@ -188,7 +272,7 @@ function fmtDate_(v, pattern) {
   return String(v);
 }
 
-function rowToItem_(row) {
+function rowToItem_(row, today) {
   var item = {};
   ITEM_COLUMNS.forEach(function (c, i) { item[c.key] = row[i]; });
   item.id = String(item.id);
@@ -197,10 +281,15 @@ function rowToItem_(row) {
   item.completedOn = fmtDate_(item.completedOn, 'yyyy-MM-dd');
   item.updatedAt = fmtDate_(item.updatedAt, "yyyy-MM-dd'T'HH:mm:ss");
   item.lastImported = fmtDate_(item.lastImported, "yyyy-MM-dd'T'HH:mm:ss");
+  item.statusSince = fmtDate_(item.statusSince, "yyyy-MM-dd'T'HH:mm:ss");
+  item.lastNudged = fmtDate_(item.lastNudged, 'yyyy-MM-dd');
   ['itemType', 'name', 'workflowStep', 'priority', 'developer', 'reportedBy', 'releaseNotes', 'quarter', 'axoCategory',
    'system', 'handler', 'status', 'commentDev', 'commentSed', 'updatedBy'].forEach(function (k) {
     item[k] = item[k] == null ? '' : String(item[k]);
   });
+  // Working days (Tue-Sat) in the current status; null once the AXO is finished or has no start time.
+  item.daysInStatus = item.statusSince && FINAL_STATUSES.indexOf(item.status) < 0
+    ? workingDaysBetween(item.statusSince, today || today_()) : null;
   return item;
 }
 
@@ -260,22 +349,34 @@ function readLists_() {
 // ---------------------------------------------------------------- API (google.script.run)
 
 function getBootstrap() {
+  ensureSchema_();
   var data = readItems_();
-  var counts = {};
+  var counts = {}, reviews = [];
   var notes = sheet_(SHEETS.notes);
   if (notes.getLastRow() > 1) {
-    notes.getRange(2, 2, notes.getLastRow() - 1, 1).getValues().forEach(function (r) {
-      var id = String(r[0]);
+    notes.getRange(2, 1, notes.getLastRow() - 1, NOTE_COLUMNS.length).getValues().forEach(function (r) {
+      var id = String(r[1]);
       counts[id] = (counts[id] || 0) + 1;
+      if (String(r[2]) === REVIEW_KIND) reviews.push({ id: id, by: String(r[4]).replace(/\s*<.*>$/, '') });
     });
   }
   var lists = readLists_();
   var props = PropertiesService.getScriptProperties();
   var email = '';
   try { email = Session.getActiveUser().getEmail(); } catch (e) {}
+  var today = today_();
+  var token = props.getProperty('SLACK_BOT_TOKEN') || '';
   return {
-    items: data.rows.map(function (r) { return rowToItem_(r.values); }),
+    items: data.rows.map(function (r) { return rowToItem_(r.values, today); }),
     noteCounts: counts,
+    reviews: reviews,
+    today: today,
+    nudgeAfterDays: NUDGE_AFTER_DAYS,
+    nudgeStatuses: NUDGE_STATUSES,
+    deleteEnabled: !!props.getProperty('DELETE_PASSCODE'),
+    appUrl: slackConfig_().appUrl,
+    emailTo: lists['Email To'] || [],
+    emailCc: lists['Email CC'] || [],
     lists: {
       categories: lists['AXO Category'] || DEFAULT_LISTS['AXO Category'],
       systems: lists['System'] || DEFAULT_LISTS['System'],
@@ -284,7 +385,8 @@ function getBootstrap() {
       slackHandlers: Object.keys(lists.slackIds || {})
     },
     currentQuarter: currentQuarter_(),
-    slackDm: !!props.getProperty('SLACK_BOT_TOKEN'),
+    slackDm: /^xoxb-/.test(token),
+    slackTokenIssue: token && !/^xoxb-/.test(token) ? 'SLACK_BOT_TOKEN is not a bot token (it must start with xoxb-)' : '',
     statuses: STATUSES,
     email: email,
     lastImport: props.getProperty('LAST_IMPORT') || '',
@@ -334,6 +436,10 @@ function updateItem(id, patch, actorName) {
 
     if (log.length) {
       hit.sheet.getRange(hit.rowNum, col.updatedBy + 1, 1, 2).setValues([[who, now]]);
+      // A new status restarts the "days in status" clock and clears the last nudge.
+      if (log.some(function (l) { return l[3] === 'Status'; })) {
+        hit.sheet.getRange(hit.rowNum, col.statusSince + 1, 1, 2).setValues([[now, '']]);
+      }
       logActivity_(log);
     }
     var after = rowToItem_(hit.sheet.getRange(hit.rowNum, 1, 1, ITEM_COLUMNS.length).getValues()[0]);
@@ -365,10 +471,12 @@ function addItem(item, actorName) {
       reportedBy: item.reportedBy || '', releaseNotes: '', quarter: isQuarter(item.quarter) ? item.quarter : currentQuarter_(),
       highPriority: item.highPriority === true, axoCategory: item.axoCategory || deriveCategory(item.name),
       system: item.system || '', handler: item.handler || '', status: item.status || '',
-      completedOn: '', commentDev: '', commentSed: '', updatedBy: who, updatedAt: now, lastImported: '', inLatestImport: false
+      completedOn: '', commentDev: '', commentSed: '', updatedBy: who, updatedAt: now, lastImported: '', inLatestImport: false,
+      statusSince: now, lastNudged: ''
     };
     var sh = sheet_(SHEETS.items);
     var at = firstFreeRow_(sh);
+    ensureRows_(sh, at);
     sh.getRange(at, 1, 1, ITEM_COLUMNS.length).setValues([ITEM_COLUMNS.map(function (c) { return rec[c.key]; })]);
     checkboxes_(sh, at, 1);
     logActivity_([[now, who, id, 'Item', '', 'Added by hand']]);
@@ -378,9 +486,10 @@ function addItem(item, actorName) {
 
 /**
  * Upserts an AXO items CSV export. CSV columns are refreshed on existing rows;
- * QA columns (status, handler, comments, ...) are never touched.
+ * QA columns (status, handler, comments, ...) are never touched. AXOs that were deleted
+ * from the tracker are skipped unless `readdDeleted` is true (they then come in as new).
  */
-function importCsv(csvText, actorName, quarter) {
+function importCsv(csvText, actorName, quarter, readdDeleted) {
   var incoming = csvToItems(parseCsv(csvText));
   if (quarter && !isQuarter(quarter)) throw new Error('Quarter must look like Q4 2026.');
   quarter = quarter || currentQuarter_();
@@ -396,10 +505,13 @@ function importCsv(csvText, actorName, quarter) {
     var sourceKeys = ITEM_COLUMNS.filter(function (c) { return c.source; }).map(function (c) { return c.key; });
     var seen = {};
     var added = [], updated = 0, unchanged = 0, log = [];
+    var deleted = readdDeleted ? {} : deletedIds_();
+    var skippedDeleted = [];
 
     incoming.forEach(function (it) {
       seen[it.id] = true;
       var hit = byId[it.id];
+      if (!hit && deleted[it.id]) { skippedDeleted.push(it.id); return; }
       if (!hit) {
         var rec = ITEM_COLUMNS.map(function (c) {
           if (c.source) return it[c.key];
@@ -411,6 +523,7 @@ function importCsv(csvText, actorName, quarter) {
             case 'inLatestImport': return true;
             case 'updatedBy': return who;
             case 'updatedAt': return now;
+            case 'statusSince': return now;
             default: return '';
           }
         });
@@ -445,13 +558,16 @@ function importCsv(csvText, actorName, quarter) {
     }
     if (added.length) {
       var start = firstFreeRow_(sh);
+      ensureRows_(sh, start + added.length - 1);
       sh.getRange(start, 1, added.length, ITEM_COLUMNS.length).setValues(added);
       checkboxes_(sh, start, added.length);
     }
-    log.push([now, who, '', 'Import', '', added.length + ' added, ' + updated + ' updated, ' + unchanged + ' unchanged, ' + dropped + ' no longer in export']);
+    log.push([now, who, '', 'Import', '', added.length + ' added, ' + updated + ' updated, ' + unchanged + ' unchanged, ' + dropped + ' no longer in export' +
+      (skippedDeleted.length ? ', ' + skippedDeleted.length + ' skipped (deleted earlier)' : '')]);
     logActivity_(log);
 
     var summary = { quarter: quarter, added: added.length, updated: updated, unchanged: unchanged, dropped: dropped,
+      skippedDeleted: skippedDeleted.length,
       newHighPriority: added.filter(function (r) { return r[col.highPriority] === true; })
         .map(function (r) { return { id: String(r[0]), name: r[col.name] }; }) };
     PropertiesService.getScriptProperties().setProperty('LAST_IMPORT',
@@ -459,6 +575,119 @@ function importCsv(csvText, actorName, quarter) {
     try { onImported_(summary, actorName); } catch (e) { console.warn('Slack notify failed: ' + e); }
     return summary;
   });
+}
+
+// ---------------------------------------------------------------- delete / restore
+
+/** IDs in the Deleted tab, as a lookup. */
+function deletedIds_() {
+  var sh = sheet_(SHEETS.deleted), out = {};
+  if (sh.getLastRow() > 1) {
+    sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().forEach(function (r) { if (String(r[0]).trim()) out[String(r[0])] = true; });
+  }
+  return out;
+}
+
+/** Deleting needs the DELETE_PASSCODE script property; five wrong tries lock it for ten minutes. */
+function checkPasscode_(passcode) {
+  var want = PropertiesService.getScriptProperties().getProperty('DELETE_PASSCODE');
+  if (!want) throw new Error('Deleting is switched off. The tracker owner needs to set a delete passcode first.');
+  var cache = CacheService.getScriptCache();
+  var fails = Number(cache.get('delete_fails') || 0);
+  if (fails >= 5) throw new Error('Too many wrong passcodes. Try again in 10 minutes.');
+  if (String(passcode == null ? '' : passcode) !== want) {
+    cache.put('delete_fails', String(fails + 1), 600);
+    throw new Error('Wrong passcode.');
+  }
+  cache.remove('delete_fails');
+}
+
+/** Removes whole rows, bottom up, one call per run of neighbouring rows. */
+function deleteRowNums_(sh, rowNums) {
+  rowNums = rowNums.slice().sort(function (a, b) { return b - a; });
+  // Sheets refuses to delete every row below the frozen header.
+  if (sh.getMaxRows() - rowNums.length < 2) sh.insertRowsAfter(sh.getMaxRows(), 20);
+  var i = 0;
+  while (i < rowNums.length) {
+    var top = rowNums[i], n = 1;
+    while (i + n < rowNums.length && rowNums[i + n] === top - n) n++;
+    sh.deleteRows(top - n + 1, n);
+    i += n;
+  }
+}
+
+/**
+ * Moves AXOs to the Deleted tab. Their notes stay in the Notes tab, so they come back
+ * with the AXO if it is restored.
+ */
+function deleteItems(ids, passcode, actorName) {
+  var want = {};
+  (ids || []).forEach(function (id) { if (String(id).trim()) want[String(id).trim()] = true; });
+  if (!Object.keys(want).length) throw new Error('Select at least one AXO to delete.');
+  checkPasscode_(passcode);
+  return withLock_(function () {
+    var data = readItems_();
+    var hits = data.rows.filter(function (r) { return want[String(r.values[0])]; });
+    if (!hits.length) throw new Error('Those AXOs are no longer in the tracker.');
+    var who = actor_(actorName), now = new Date();
+    var del = sheet_(SHEETS.deleted);
+    var out = hits.map(function (r) { return r.values.concat([who, now]); });
+    var at = Math.max(del.getLastRow(), 1) + 1;
+    ensureRows_(del, at + out.length - 1);
+    del.getRange(at, 1, out.length, out[0].length).setValues(out);
+    deleteRowNums_(data.sheet, hits.map(function (r) { return r.rowNum; }));
+    var gone = hits.map(function (r) { return String(r.values[0]); });
+    logActivity_([[now, who, '', 'Delete', '', gone.length + ' AXO' + (gone.length === 1 ? '' : 's') + ' moved to Deleted: ' +
+      gone.slice(0, 40).join(', ') + (gone.length > 40 ? ', …' : '')]]);
+    return { deleted: gone };
+  });
+}
+
+/** Moves AXOs from the Deleted tab back into the tracker. IDs already in the tracker are left alone. */
+function restoreItems_(ids, actorName) {
+  var want = {};
+  ids.forEach(function (id) { want[String(id)] = true; });
+  return withLock_(function () {
+    var del = sheet_(SHEETS.deleted);
+    var items = sheet_(SHEETS.items);
+    var width = ITEM_COLUMNS.length;
+    var live = {};
+    readItems_().rows.forEach(function (r) { live[String(r.values[0])] = true; });
+    var restored = [], skipped = [], rowNums = [], rows = [];
+    if (del.getLastRow() > 1) {
+      del.getRange(2, 1, del.getLastRow() - 1, width).getValues().forEach(function (v, i) {
+        var id = String(v[0]);
+        if (!want[id] || restored.indexOf(id) >= 0) return;
+        if (live[id]) { skipped.push(id); return; }
+        restored.push(id); rowNums.push(i + 2); rows.push(v);
+      });
+    }
+    if (rows.length) {
+      var at = firstFreeRow_(items);
+      ensureRows_(items, at + rows.length - 1);
+      items.getRange(at, 1, rows.length, width).setValues(rows);
+      checkboxes_(items, at, rows.length);
+      deleteRowNums_(del, rowNums);
+      logActivity_([[new Date(), actor_(actorName), '', 'Restore', '', restored.length + ' AXO' + (restored.length === 1 ? '' : 's') +
+        ' restored: ' + restored.slice(0, 40).join(', ')]]);
+    }
+    return { restored: restored, skipped: skipped };
+  });
+}
+
+/** Sheet menu: select rows in the Deleted tab, then run this to put them back. */
+function restoreSelectedDeleted() {
+  var ui = SpreadsheetApp.getUi();
+  var range = SpreadsheetApp.getActiveRange();
+  if (!range || range.getSheet().getName() !== SHEETS.deleted) {
+    ui.alert('Open the Deleted tab and select the rows to restore first.');
+    return;
+  }
+  var ids = range.getSheet().getRange(range.getRow(), 1, range.getNumRows(), 1).getValues()
+    .map(function (r) { return String(r[0]).trim(); }).filter(function (id) { return /^\d+$/.test(id); });
+  if (!ids.length) { ui.alert('No AXO rows are selected.'); return; }
+  var res = restoreItems_(ids, 'Sheet menu');
+  ui.alert(res.restored.length + ' restored.' + (res.skipped.length ? ' ' + res.skipped.length + ' skipped because they are already in the tracker.' : ''));
 }
 
 function getItemDetail(id) {

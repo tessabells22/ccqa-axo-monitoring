@@ -28,7 +28,10 @@ var ITEM_COLUMNS = [
   { key: 'updatedBy',     header: 'Updated By' },
   { key: 'updatedAt',     header: 'Updated At' },
   { key: 'lastImported',  header: 'Last Imported' },
-  { key: 'inLatestImport', header: 'In Latest Import' }
+  { key: 'inLatestImport', header: 'In Latest Import' },
+  // Added later, so they sit at the end: existing sheets keep their column order.
+  { key: 'statusSince',   header: 'Status Since' },   // when the current Status was set
+  { key: 'lastNudged',    header: 'Last Nudged' }     // last Slack nudge for the current Status
 ];
 
 var NOTE_COLUMNS = ['Note ID', 'AXO ID', 'Kind', 'Note', 'Author', 'Created At'];
@@ -46,6 +49,15 @@ var STATUSES = [
   { name: 'Moved',           fill: '#00B0F0', ink: '#0B1B26', group: 'Discarded' },
   { name: 'Withdraw',        fill: '#FF0000', ink: '#FFFFFF', group: 'Discarded' }
 ];
+
+/** The team's working days as JS weekday numbers (0 = Sunday): Tuesday to Saturday. */
+var WORK_DAYS = [2, 3, 4, 5, 6];
+
+/** Statuses where the handler gets a Slack nudge after NUDGE_AFTER_DAYS working days without a change. */
+var NUDGE_STATUSES = ['Ongoing QA', 'Ongoing BA/DEV', 'Awaiting BA/DEV', 'For Review', 'Review Points', 'For Upload'];
+var NUDGE_AFTER_DAYS = 2;
+/** Nothing more happens to an AXO in these, so "days in status" is not counted. */
+var FINAL_STATUSES = ['Done', 'Moved', 'Withdraw'];
 
 /** Defaults for the Lists sheet, from the workbook's "Drop down List" tab. */
 var DEFAULT_LISTS = {
@@ -79,6 +91,47 @@ function quarterLabel(year, month) {
 
 function isQuarter(s) {
   return /^Q[1-4] \d{4}$/.test(String(s || ''));
+}
+
+/** First and last day of a quarter label: "Q4 2026" -> 2026-10-01 .. 2026-12-31. */
+function quarterRange(label) {
+  var m = String(label || '').match(/^Q([1-4]) (\d{4})$/);
+  if (!m) return null;
+  var q = Number(m[1]), y = Number(m[2]);
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  var lastDay = new Date(Date.UTC(y, q * 3, 0)).getUTCDate();
+  return { from: y + '-' + pad(q * 3 - 2) + '-01', to: y + '-' + pad(q * 3) + '-' + pad(lastDay) };
+}
+
+/**
+ * Working days from one calendar day to another, both "yyyy-MM-dd". The start day
+ * itself is not counted: set on Tuesday, read on Thursday = 2 (Wed, Thu).
+ */
+function workingDaysBetween(fromDay, toDay, workDays) {
+  var a = String(fromDay || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  var b = String(toDay || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!a || !b) return 0;
+  workDays = workDays || WORK_DAYS;
+  var start = Date.UTC(+a[1], +a[2] - 1, +a[3]), end = Date.UTC(+b[1], +b[2] - 1, +b[3]);
+  var n = 0;
+  for (var t = start + 864e5; t <= end; t += 864e5) {
+    if (workDays.indexOf(new Date(t).getUTCDay()) >= 0) n++;
+  }
+  return n;
+}
+
+/**
+ * Whether an item is due a nudge today: in a nudge status for NUDGE_AFTER_DAYS+ working
+ * days, and not nudged for this status in the last NUDGE_AFTER_DAYS working days.
+ * `item.statusSince` / `item.lastNudged` are "yyyy-MM-dd..." strings.
+ */
+function nudgeDue(item, today) {
+  if (NUDGE_STATUSES.indexOf(item.status) < 0 || !item.statusSince) return false;
+  var since = String(item.statusSince).slice(0, 10);
+  if (workingDaysBetween(since, today) < NUDGE_AFTER_DAYS) return false;
+  var last = String(item.lastNudged || '').slice(0, 10);
+  if (!last || last < since) return true;
+  return workingDaysBetween(last, today) >= NUDGE_AFTER_DAYS;
 }
 
 function statusGroup(status) {
@@ -169,7 +222,8 @@ if (typeof module !== 'undefined') {
   module.exports = {
     ITEM_COLUMNS: ITEM_COLUMNS, STATUSES: STATUSES, DEFAULT_LISTS: DEFAULT_LISTS,
     mapItemType: mapItemType, deriveCategory: deriveCategory, statusGroup: statusGroup,
-    quarterLabel: quarterLabel, isQuarter: isQuarter,
+    quarterLabel: quarterLabel, isQuarter: isQuarter, quarterRange: quarterRange,
+    workingDaysBetween: workingDaysBetween, nudgeDue: nudgeDue, WORK_DAYS: WORK_DAYS,
     parseCsv: parseCsv, csvToItems: csvToItems
   };
 }

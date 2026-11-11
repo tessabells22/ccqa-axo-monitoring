@@ -9,6 +9,11 @@ Web app for the Carrier Compliance QA team to track AXO items, built the same wa
 - **Dev and BA** are shown under every item name. BA is the AXO export's "Reported By" column.
 - **Review points**: setting an item to Review Points opens a box for the reviewing QA to write the points. They're saved on the item and sent to the handler as a Slack DM.
 - **Notes**: every item has a timestamped, signed notes thread (General, DEV, SED, Blocker) plus a change history.
+- **Days in Status**: each AXO shows how many working days (Tuesday to Saturday) it has been in its current status. After 2 working days the handler gets a Slack DM from the bot.
+- **QA workload**: AXOs per handler for the selected quarter, split into in progress, not started, completed and discarded, plus reviews given.
+- **Reports**: a quarter or date-range report (summary, status breakdown, workload, activity, items needing attention) that downloads as a PDF.
+- **Delete**: remove one, several or all AXOs with a passcode. They move to a Deleted tab and can be restored.
+- **Email**: opens a pre-filled Outlook draft with an AXO's details, sent from the person's own work email.
 - **Slack**: optional channel pings for key status changes, blocker notes, imports and a weekly digest (Tuesdays, 5 AM Manila).
 
 ## Columns
@@ -30,19 +35,67 @@ Status groups follow the workbook's Data Monitoring tab: **In Progress** = Ongoi
 1. Create a Google Sheet named `CCQA AXO Tracker` in the team's shared drive.
 2. In the sheet: **Extensions → Apps Script**. Delete the default `Code.gs`.
 3. Create these files and paste in the contents from `src/`:
-   `Code.gs`, `Mapping.gs`, `Slack.gs` (Script files) and `Index`, `Styles`, `Script` (HTML files, no extension).
+   `Code.gs`, `Mapping.gs`, `Slack.gs`, `Report.gs` (Script files) and `Index`, `Styles`, `Script` (HTML files, no extension).
 4. **Project Settings** → tick *Show "appsscript.json"*, then replace its contents with `src/appsscript.json`.
-5. Select `setup` in the function dropdown and **Run**. Approve the permissions. This creates the Items, Notes, Activity and Lists tabs with dropdowns and status colours.
+5. Select `setup` in the function dropdown and **Run**. Approve the permissions. This creates the Items, Notes, Activity, Lists and Deleted tabs with dropdowns and status colours.
 6. **Deploy → New deployment → Web app**. Execute as **Me**, access **Anyone within [your organisation]**. Copy the `/exec` URL and share it with the team.
 7. Open the app, click **Import AXO CSV** and load the export.
 
-To change dropdown values (handlers, systems, categories, note kinds), edit the **Lists** tab. No code change needed.
+To change dropdown values (handlers, systems, categories, note kinds), Slack member IDs or the default email recipients, edit the **Lists** tab. No code change needed.
 
 Alternatively, push with [clasp](https://github.com/google/clasp): copy `.clasp.json.example` to `.clasp.json`, put in the script ID, then `npx @google/clasp push`.
+
+### Script properties
+
+Set these under **Project Settings → Script properties**. All are optional except where noted.
+
+| Property | What it does |
+| --- | --- |
+| `DELETE_PASSCODE` | The passcode the tracker asks for before deleting AXOs. Deleting stays switched off until this is set. |
+| `SLACK_WEBHOOK_URL` | Turns on channel posts. |
+| `SLACK_BOT_TOKEN` | The Slack app's **Bot User OAuth Token** (starts with `xoxb-`). Needed for DMs: review points and nudges. A user token (`xoxp-`) is refused, because Slack would send the DMs as you. |
+| `APP_URL` | The web app `/exec` URL, used for links in Slack messages and emails. |
+| `SLACK_NOTIFY_STATUSES` | Comma-separated statuses that post to the channel. Default: Awaiting BA/DEV, For Review, Done. |
+| `NUDGE_HOUR` | Hour of the day (0–23, Manila time) the nudges go out. Default 5. Run `installTriggers` again after changing it. |
 
 ### Updating
 
 After changing code: **Deploy → Manage deployments → Edit (pencil) → Version: New version → Deploy**. This keeps the same URL. Creating a *new* deployment gives a new URL, which breaks everyone's bookmark.
+
+### Upgrading from an earlier version
+
+1. Paste the new contents of `Code.gs`, `Mapping.gs`, `Slack.gs`, `Index`, `Styles` and `Script`, and add the new script file `Report.gs`. `appsscript.json` has not changed.
+2. Deploy a new version of the existing deployment (see *Updating*).
+3. Open the tracker once. It upgrades the sheet by itself: adds the Status Since and Last Nudged columns at the end of Items, the Deleted tab, and the Email To / Email CC columns in Lists. Existing data is not moved or changed, apart from two repairs: earlier versions unticked High Priority and In Latest Import on newly imported rows, and the upgrade ticks them back.
+4. Set `DELETE_PASSCODE`, fill in **Email To** / **Email CC** in the Lists tab, and run `installTriggers` once so the nudges are scheduled.
+
+## Day to day
+
+### Days in Status and nudges
+
+Days in Status counts working days, Tuesday to Saturday, since the AXO's Status last changed; the day of the change is not counted, and other edits (handler, comments) don't restart it. Done, Moved and Withdraw show a dash. The working days are the `WORK_DAYS` list at the top of `Mapping.gs`.
+
+On each working day at 5 AM Manila time (`NUDGE_HOUR`), `sendNudges` looks for AXOs that have been in Ongoing QA, Ongoing BA/DEV, Awaiting BA/DEV, For Review, Review Points or For Upload for 2 or more working days. Each handler gets one DM from the bot listing all of their stuck AXOs. An AXO is nudged again only after another 2 working days in the same status. Handlers without a Slack ID, and AXOs with no handler, are listed in one post in the team channel instead. Change the statuses in `NUDGE_STATUSES` and the threshold in `NUDGE_AFTER_DAYS` (`Mapping.gs`).
+
+### Deleting and restoring AXOs
+
+Tick the boxes on the left of the table (the box in the header selects everything in the current view, so with the All tab and no filters that is every AXO), then **Delete**. The tracker asks for the delete passcode, and for 10 or more AXOs you also type DELETE. Five wrong passcodes lock deleting for ten minutes.
+
+Deleted AXOs move to the **Deleted** tab with who deleted them and when. Their notes stay in the Notes tab. To restore: open the Deleted tab in the sheet, select the rows, then **CCQA Tracker → Restore selected rows**. They come back with their status, handler, comments and notes.
+
+A later import skips AXOs that are in the Deleted tab, so a deleted AXO doesn't reappear by itself. The import result says how many were skipped and offers **Import them again**, which adds them as new, not-started AXOs.
+
+### Reports
+
+**Report** in the top bar builds a report for one quarter (or all quarters) and a date range. *AXOs in* decides which AXOs the snapshot sections cover; the dates decide what counts as activity (completed, status changes, review points, blockers). **Download PDF** makes the PDF on the server; **Print** is a fallback that uses the browser's print dialog.
+
+Sections: summary, status breakdown by Bug and User Story, by AXO category, QA workload (including completed, review points received and reviews given in the period), activity in the period, completed in the period, needs attention (2+ working days in one status, high priority still open, blockers raised), and an optional full AXO list.
+
+### Email
+
+**Email** in an AXO's panel opens a draft with the AXO's details. *Open in Outlook app* uses the computer's default mail app; *Open in Outlook on the web* opens Outlook in the browser. Nothing is sent by the tracker: the person reviews the draft and clicks Send, so it goes from their own work email. Default recipients come from the **Email To** and **Email CC** columns in the Lists tab, one address per row.
+
+Sending with no draft step would need your Microsoft 365 admin to approve an app with permission to send mail (Microsoft Graph `Mail.Send`) or a Power Automate flow with a premium HTTP trigger.
 
 ## Deployment: Apps Script or a cloud platform?
 
@@ -72,7 +125,7 @@ Back it up anyway: in the Sheet, **File → Version history** is automatic. For 
 3. In Apps Script: **Project Settings → Script properties → Add**:
    - `SLACK_WEBHOOK_URL` = the webhook URL
    - `APP_URL` = the web app `/exec` URL (so messages link straight to the item)
-4. Run `testSlack`, then `installTriggers` to schedule the weekly digest. Apps Script fires it some time between 5:00 and 6:00 AM on Tuesday; run `sendWeeklyDigest` to see one now.
+4. Run `testSlack`, then `installTriggers` to schedule the weekly digest and the 2-day nudges (Tuesday to Saturday). Apps Script fires it some time between 5:00 and 6:00 AM on Tuesday; run `sendWeeklyDigest` to see one now.
 5. Set up review point DMs (next section).
 
 ### Review point DMs
@@ -84,7 +137,9 @@ Review points go to the handler as a direct message from the Slack app. A webhoo
 1. Open <https://api.slack.com/apps> and pick the tracker's app.
 2. **OAuth & Permissions → Scopes → Bot Token Scopes → Add an OAuth Scope** → add `chat:write`.
 3. Scroll up and click **Install to Workspace** (or **Reinstall to Workspace** if it's already installed) and approve. A scope only takes effect after a (re)install. If your workspace requires admin approval for apps, this step goes to a Slack admin.
-4. Copy the **Bot User OAuth Token** shown on that page. It starts with `xoxb-`.
+4. Copy the **Bot User OAuth Token** shown on that page. It starts with `xoxb-`. Do not use the *User OAuth Token* (`xoxp-`) shown above it: with that one Slack sends the DMs from your own account. The tracker refuses a user token and says so on the main page.
+
+To check which account Slack will send as: in the sheet, **CCQA Tracker → Check Slack setup**.
 
 **2. Let people see the app's messages**
 
@@ -130,10 +185,11 @@ The tracker falls back to posting the points in the channel with an @mention, an
 | --- | --- |
 | Status changes to **Awaiting BA/DEV**, **For Review** or **Done** | These are the hand-offs someone else needs to act on. Change the list with the `SLACK_NOTIFY_STATUSES` property (comma-separated). |
 | **Review points** sent | DM to the handler with the points and the reviewer's name. If the handler has no Slack ID or there's no bot token, it posts to the channel with an @mention instead, and the app says so. |
+| An AXO stays in the same status for 2+ working days | DM to the handler from the bot, one message listing all of their stuck AXOs. See *Days in Status and nudges*. |
 | An item is flagged High Priority, or a handler is assigned | Assignee gets @mentioned. |
 | A **Blocker** note is added | Blockers shouldn't wait for someone to open the tracker. Other note types stay in the tracker. |
 | An import adds new items | Lists any new high-priority AXOs. |
-| Weekly digest, Tuesdays at 5 AM (Manila) | Counts by status, high-priority items with no handler, and items stuck in Awaiting BA/DEV for 2+ days. |
+| Weekly digest, Tuesdays at 5 AM (Manila) | Counts by status, high-priority items with no handler, and items in Awaiting BA/DEV for 2+ working days. |
 
 Ongoing QA and minor edits are deliberately quiet: a channel that pings on every dropdown change gets muted within a week.
 

@@ -226,3 +226,306 @@ test('review points fall back to a channel @mention without a token or Slack ID'
   g2.ctx.importCsv(CSV, 'x');
   assert.strictEqual(g2.ctx.setReviewPoints('20001', 'x', 'Carla - QA').slack.via, 'none');
 });
+
+// ---------------------------------------------------------------- working days, days in status, nudges
+
+test('working days count Tuesday to Saturday and skip the start day', () => {
+  // 2026-11-10 is a Tuesday
+  assert.strictEqual(M.workingDaysBetween('2026-11-10', '2026-11-10'), 0);
+  assert.strictEqual(M.workingDaysBetween('2026-11-10', '2026-11-12'), 2);
+  assert.strictEqual(M.workingDaysBetween('2026-11-14', '2026-11-17'), 1, 'Sat -> Tue skips Sun and Mon');
+  assert.strictEqual(M.workingDaysBetween('2026-11-13', '2026-11-18'), 3);
+  assert.strictEqual(M.workingDaysBetween('2026-11-12', '2026-11-10'), 0, 'never negative');
+  assert.deepStrictEqual(M.quarterRange('Q4 2026'), { from: '2026-10-01', to: '2026-12-31' });
+  assert.deepStrictEqual(M.quarterRange('Q1 2028'), { from: '2028-01-01', to: '2028-03-31' });
+});
+
+test('nudgeDue: only stuck nudge statuses, and not again within two working days', () => {
+  const base = { status: 'Ongoing QA', statusSince: '2026-11-10T08:00:00', lastNudged: '' };
+  assert.strictEqual(M.nudgeDue(base, '2026-11-11'), false, 'one working day');
+  assert.strictEqual(M.nudgeDue(base, '2026-11-12'), true);
+  assert.strictEqual(M.nudgeDue({ ...base, status: 'Done' }, '2026-11-20'), false);
+  assert.strictEqual(M.nudgeDue({ ...base, status: '' }, '2026-11-20'), false);
+  assert.strictEqual(M.nudgeDue({ ...base, lastNudged: '2026-11-12' }, '2026-11-13'), false, 'nudged yesterday');
+  assert.strictEqual(M.nudgeDue({ ...base, lastNudged: '2026-11-12' }, '2026-11-14'), true, 'two working days later');
+  assert.strictEqual(M.nudgeDue({ ...base, lastNudged: '2026-11-05' }, '2026-11-12'), true, 'old nudge was for an earlier status');
+});
+
+test('days in status follow the clock and restart on a status change', () => {
+  const g = fresh();
+  g.setNow('2026-11-10T09:00:00+08:00');
+  g.ctx.importCsv(CSV, 'x');
+  g.ctx.updateItem('20001', { status: 'Ongoing QA' }, 'x');
+  g.ctx.updateItem('20002', { status: 'Done' }, 'x');
+  g.setNow('2026-11-13T09:00:00+08:00');
+  const items = g.ctx.getBootstrap().items;
+  assert.strictEqual(items.find((i) => i.id === '20001').daysInStatus, 3);
+  assert.strictEqual(items.find((i) => i.id === '20003').daysInStatus, 3, 'not-started AXOs count from when they arrived');
+  assert.strictEqual(items.find((i) => i.id === '20002').daysInStatus, null, 'finished AXOs are not counted');
+  const moved = g.ctx.updateItem('20001', { status: 'For Review' }, 'x');
+  assert.strictEqual(moved.daysInStatus, 0);
+  g.ctx.updateItem('20001', { handler: 'Ley - QA' }, 'x');
+  g.setNow('2026-11-14T09:00:00+08:00');
+  assert.strictEqual(g.ctx.getBootstrap().items.find((i) => i.id === '20001').daysInStatus, 1, 'other edits do not restart it');
+});
+
+test('nudges: one bot DM per handler, no repeat until two more working days', () => {
+  const g = fresh({ props: { SLACK_WEBHOOK_URL: 'https://hooks/x', SLACK_BOT_TOKEN: 'xoxb-1' } });
+  g.setNow('2026-11-10T09:00:00+08:00');
+  g.ctx.importCsv(CSV, 'x');
+  setSlackId(g.ss, 'Ley - QA', 'U0LEY');
+  g.ctx.updateItem('20001', { handler: 'Ley - QA', status: 'Ongoing QA' }, 'x');
+  g.ctx.updateItem('20002', { handler: 'Ley - QA', status: 'Awaiting BA/DEV' }, 'x');
+  g.ctx.updateItem('20003', { handler: 'Carla - QA', status: 'For Review' }, 'x');
+  g.ctx.updateItem('20004', { handler: 'Ley - QA', status: 'Done' }, 'x');
+  const posts = g.slackPosts.length;
+
+  g.setNow('2026-11-11T05:10:00+08:00');
+  assert.strictEqual(g.ctx.sendNudges().due, 0, 'one working day is too early');
+
+  g.setNow('2026-11-12T05:10:00+08:00');
+  const r = g.ctx.sendNudges();
+  assert.deepStrictEqual([r.due, r.dms, r.channel, r.failed], [3, 1, 1, 0]);
+  assert.strictEqual(g.slackDms.length, 1, 'both of Ley\'s AXOs in one DM');
+  assert.strictEqual(g.slackDms[0].channel, 'U0LEY');
+  assert.strictEqual(g.slackDms[0].auth, 'Bearer xoxb-1');
+  assert.match(g.slackDms[0].blocks[0].text.text, /2 AXOs of yours/);
+  assert.match(g.slackDms[0].blocks[0].text.text, /AXO 20001[\s\S]*Ongoing QA\* for 2 working days/);
+  assert.doesNotMatch(g.slackDms[0].blocks[0].text.text, /20004/, 'Done is never nudged');
+  assert.strictEqual(g.slackPosts.length, posts + 1, 'Carla has no Slack ID, so the channel gets it');
+  assert.match(g.slackPosts[posts].blocks[0].text.text, /Carla - QA[\s\S]*20003/);
+  assert.strictEqual(g.ctx.getBootstrap().items.find((i) => i.id === '20001').lastNudged, '2026-11-12');
+
+  g.setNow('2026-11-13T05:10:00+08:00');
+  assert.strictEqual(g.ctx.sendNudges().due, 0, 'not again the next day');
+  g.ctx.updateItem('20002', { status: 'Ongoing QA' }, 'x');
+  g.setNow('2026-11-14T05:10:00+08:00');
+  const again = g.ctx.sendNudges();
+  assert.strictEqual(again.due, 2, '20001 and 20003 again; 20002 restarted its clock');
+  assert.doesNotMatch(g.slackDms[1].blocks[0].text.text, /20002/);
+});
+
+test('a user token (xoxp-) is refused so DMs never come from a person', () => {
+  const g = fresh({ props: { SLACK_WEBHOOK_URL: 'https://hooks/x', SLACK_BOT_TOKEN: 'xoxp-user-token' } });
+  g.ctx.importCsv(CSV, 'x');
+  setSlackId(g.ss, 'Ley - QA', 'U0LEY');
+  g.ctx.updateItem('20002', { handler: 'Ley - QA' }, 'x');
+  const r = g.ctx.setReviewPoints('20002', 'fix it', 'Carla - QA');
+  assert.strictEqual(g.slackDms.length, 0, 'nothing sent with the user token');
+  assert.strictEqual(r.slack.via, 'channel');
+  assert.match(r.slack.reason, /not a bot token/);
+  const boot = g.ctx.getBootstrap();
+  assert.strictEqual(boot.slackDm, false);
+  assert.match(boot.slackTokenIssue, /xoxb-/);
+  assert.match(g.ctx.checkSlackSetup(), /BLOCKED[\s\S]*user token \(xoxp-\)/);
+
+  const ok = fresh({ props: { SLACK_BOT_TOKEN: 'xoxb-1' } });
+  assert.match(ok.ctx.checkSlackSetup(), /sent as the bot "ccqa_axo_notifier"/);
+  assert.strictEqual(ok.ctx.getBootstrap().slackDm, true);
+});
+
+test('installTriggers schedules the Tuesday digest and Tue-Sat nudges', () => {
+  const g = fresh({ props: { NUDGE_HOUR: '21' } });
+  g.ctx.installTriggers();
+  assert.deepStrictEqual(g.triggers.filter((t) => t.fn === 'sendWeeklyDigest').map((t) => [t.day, t.hour]), [['TUESDAY', 5]]);
+  assert.deepStrictEqual(g.triggers.filter((t) => t.fn === 'sendNudges').map((t) => t.day),
+    ['TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY']);
+  assert.ok(g.triggers.filter((t) => t.fn === 'sendNudges').every((t) => t.hour === 21));
+});
+
+// ---------------------------------------------------------------- delete / restore
+
+test('delete needs the passcode and moves AXOs to the Deleted tab', () => {
+  const locked = fresh();
+  locked.ctx.importCsv(CSV, 'x');
+  assert.throws(() => locked.ctx.deleteItems(['20001'], 'anything', 'x'), /switched off/);
+  assert.strictEqual(locked.ctx.getBootstrap().deleteEnabled, false);
+
+  const g = fresh({ props: { DELETE_PASSCODE: 'open-sesame' } });
+  g.ctx.importCsv(CSV, 'x');
+  g.ctx.updateItem('20002', { status: 'Ongoing QA', handler: 'Ley - QA' }, 'x');
+  g.ctx.addNote('20002', 'General', 'keep me', 'x');
+  assert.throws(() => g.ctx.deleteItems([], 'open-sesame', 'x'), /Select at least one/);
+  assert.throws(() => g.ctx.deleteItems(['20002'], 'nope', 'x'), /Wrong passcode/);
+  assert.strictEqual(g.ctx.getBootstrap().items.length, 5, 'nothing deleted on a wrong passcode');
+
+  const res = g.ctx.deleteItems(['20002', '20004', '99999'], 'open-sesame', 'Tessa - QA');
+  assert.deepStrictEqual(Array.from(res.deleted), ['20002', '20004']);
+  assert.deepStrictEqual(Array.from(g.ctx.getBootstrap().items, (i) => i.id).sort(), ['20001', '20003', '20005']);
+  const del = g.ss.getSheetByName('Deleted').dump();
+  assert.strictEqual(del.length, 3);
+  assert.strictEqual(del[1][del[0].indexOf('Status')], 'Ongoing QA', 'QA fields are kept in the Deleted tab');
+  assert.strictEqual(del[1][del[0].indexOf('Deleted By')], 'Tessa - QA');
+  assert.ok(g.ss.getSheetByName('Activity').dump().some((r) => r[3] === 'Delete' && /2 AXOs moved to Deleted: 20002, 20004/.test(r[5])));
+  // the remaining rows are intact and still editable
+  assert.strictEqual(g.ctx.updateItem('20005', { status: 'Done' }, 'x').status, 'Done');
+  assert.strictEqual(g.ctx.getBootstrap().items.find((i) => i.id === '20001').highPriority, true);
+});
+
+test('five wrong passcodes lock deleting', () => {
+  const g = fresh({ props: { DELETE_PASSCODE: 'pw' } });
+  g.ctx.importCsv(CSV, 'x');
+  for (let i = 0; i < 5; i++) assert.throws(() => g.ctx.deleteItems(['20001'], 'bad', 'x'), /Wrong passcode/);
+  assert.throws(() => g.ctx.deleteItems(['20001'], 'pw', 'x'), /Too many wrong passcodes/);
+});
+
+test('deleted AXOs stay out on re-import unless asked for, and can be restored', () => {
+  const g = fresh({ props: { DELETE_PASSCODE: 'pw' } });
+  g.ctx.importCsv(CSV, 'x');
+  g.ctx.updateItem('20002', { status: 'For Review', handler: 'Ley - QA' }, 'x');
+  g.ctx.addNote('20002', 'General', 'still here', 'x');
+  g.ctx.deleteItems(['20002', '20003'], 'pw', 'x');
+
+  const again = g.ctx.importCsv(CSV, 'x');
+  assert.deepStrictEqual([again.added, again.skippedDeleted, again.unchanged], [0, 2, 3]);
+  assert.strictEqual(g.ctx.getBootstrap().items.length, 3);
+
+  const restored = g.ctx.restoreItems_(['20002'], 'x');
+  assert.deepStrictEqual(Array.from(restored.restored), ['20002']);
+  const back = g.ctx.getBootstrap().items.find((i) => i.id === '20002');
+  assert.deepStrictEqual([back.status, back.handler], ['For Review', 'Ley - QA'], 'comes back as it was');
+  assert.strictEqual(g.ctx.getItemDetail('20002').notes[0].text, 'still here', 'notes come back with it');
+  assert.strictEqual(g.ss.getSheetByName('Deleted').dump().length, 2, 'only 20003 is left in Deleted');
+
+  const forced = g.ctx.importCsv(CSV, 'x', '', true);
+  assert.deepStrictEqual([forced.added, forced.skippedDeleted], [1, 0]);
+  assert.strictEqual(g.ctx.getBootstrap().items.find((i) => i.id === '20003').status, '', 're-added as new');
+  assert.strictEqual(g.ctx.importCsv(CSV, 'x').skippedDeleted, 0, 'now live again, so no longer skipped');
+});
+
+test('delete ALL, then import again into the emptied sheet', () => {
+  const g = fresh({ props: { DELETE_PASSCODE: 'pw' } });
+  g.ctx.importCsv(CSV, 'x');
+  const ids = g.ctx.getBootstrap().items.map((i) => i.id);
+  assert.strictEqual(g.ctx.deleteItems(ids, 'pw', 'x').deleted.length, 5);
+  assert.strictEqual(g.ctx.getBootstrap().items.length, 0);
+  assert.strictEqual(g.ss.getSheetByName('Items').getLastRow(), 1, 'only the header is left');
+  const res = g.ctx.importCsv(CSV, 'x', '', true);
+  assert.strictEqual(res.added, 5);
+  assert.strictEqual(g.ctx.addItem({ id: '30009', name: 'ERPIS extra' }, 'x').id, '30009');
+  assert.strictEqual(g.ctx.getBootstrap().items.length, 6);
+});
+
+test('a sheet that shrank still takes a large import', () => {
+  const g = fresh();
+  const items = g.ss.getSheetByName('Items');
+  items.maxRows = 3;
+  const head = CSV.split('\n')[0];
+  let big = head + '\n';
+  for (let i = 0; i < 700; i++) big += `"${40000 + i}","defects","SERPCAR bulk ${i}","1. New","1","130","Medium","2","3","","","Dev","","BA","1",\n`;
+  assert.strictEqual(g.ctx.importCsv(big, 'x').added, 700);
+  assert.strictEqual(g.ctx.getBootstrap().items.length, 700);
+});
+
+// ---------------------------------------------------------------- upgrade from the earlier sheet layout
+
+test('an existing sheet is upgraded on first load without losing data', () => {
+  const g = fresh({ props: { DELETE_PASSCODE: 'pw' } });
+  g.setNow('2026-11-03T09:00:00+08:00');
+  g.ctx.importCsv(CSV, 'x');
+  g.ctx.updateItem('20002', { status: 'Ongoing QA', handler: 'Ley - QA' }, 'x');
+  g.ctx.updateItem('20003', { highPriority: true }, 'x');
+  g.ctx.updateItem('20003', { highPriority: false }, 'x');
+  // Put the sheet back to how the previous version left it: no new columns, no Deleted
+  // tab, High Priority unticked by the old checkbox bug, Lists without the email columns.
+  const items = g.ss.getSheetByName('Items');
+  const head = items.dump()[0];
+  ['Status Since', 'Last Nudged'].forEach((h) => {
+    const c = head.indexOf(h) + 1;
+    for (let r = 1; r <= items.getLastRow(); r++) items.set(r, c, '');
+  });
+  g.setCell('20001', 'High Priority', false);
+  ['20001', '20002', '20003', '20004', '20005'].forEach((id) => g.setCell(id, 'In Latest Import', false));
+  delete g.ss.sheets.Deleted;
+  const lists = g.ss.getSheetByName('Lists');
+  const lh = lists.dump()[0];
+  ['Email To', 'Email CC'].forEach((h) => lists.set(1, lh.indexOf(h) + 1, ''));
+  setSlackId(g.ss, 'Ley - QA', 'U0LEY');
+  delete g.props.SCHEMA_VERSION;
+
+  g.setNow('2026-11-06T09:00:00+08:00');
+  const boot = g.ctx.getBootstrap();
+  assert.strictEqual(g.props.SCHEMA_VERSION, '3');
+  assert.ok(g.ss.getSheetByName('Deleted'), 'Deleted tab created');
+  const newLists = lists.dump()[0];
+  assert.ok(newLists.includes('Email To') && newLists.includes('Email CC'));
+  assert.deepStrictEqual(Array.from(boot.lists.slackHandlers), ['Ley - QA'], 'existing Slack IDs survive');
+  const by = (id) => boot.items.find((i) => i.id === id);
+  assert.strictEqual(boot.items.length, 5);
+  assert.deepStrictEqual([by('20002').status, by('20002').handler], ['Ongoing QA', 'Ley - QA']);
+  assert.strictEqual(by('20002').statusSince.slice(0, 10), '2026-11-03', 'taken from the Activity log');
+  assert.strictEqual(by('20002').daysInStatus, 3);
+  assert.strictEqual(by('20001').highPriority, true, 'High Priority put back for High-priority AXOs');
+  assert.strictEqual(by('20003').highPriority, false, 'but not where someone unticked it by hand');
+  assert.ok(boot.items.every((i) => i.inLatestImport), '"In Latest Import" put back for the last import');
+});
+
+// ---------------------------------------------------------------- report
+
+test('report: snapshot, workload and period activity', () => {
+  const g = fresh();
+  g.setNow('2026-11-03T09:00:00+08:00');
+  g.ctx.importCsv(CSV, 'x', 'Q4 2026');
+  g.ctx.addItem({ id: '30001', name: 'ERPIS other quarter', quarter: 'Q3 2026' }, 'x');
+  g.ctx.updateItem('20001', { handler: 'Ley - QA', status: 'Ongoing QA' }, 'Ley - QA');
+  g.ctx.updateItem('20002', { handler: 'Ley - QA', status: 'For Review' }, 'Ley - QA');
+  g.ctx.updateItem('20003', { handler: 'Carla - QA', status: 'Done' }, 'Carla - QA');
+  g.ctx.updateItem('20005', { handler: 'Carla - QA', status: 'Withdraw' }, 'Carla - QA');
+  g.ctx.setReviewPoints('20002', 'screenshot missing', 'Carla - QA');
+  g.ctx.addNote('20001', 'Blocker', 'creds <expired>', 'Ley - QA');
+  g.setNow('2026-11-07T09:00:00+08:00');
+
+  const d = g.ctx.reportData_({ quarter: 'Q4 2026', from: '2026-11-01', to: '2026-11-07', actorName: 'Tessa - QA <t@x.com>' });
+  assert.strictEqual(d.total, 5, 'the Q3 AXO is out of scope');
+  assert.deepStrictEqual({ ...d.groups }, { 'Not Started': 1, 'In Progress': 2, 'Completed': 1, 'Discarded': 1 });
+  assert.strictEqual(d.completionRate, 25, '1 completed of 4 not discarded');
+  assert.strictEqual(d.options.by, 'Tessa - QA');
+  const ley = d.workload.find((w) => w.name === 'Ley - QA'), carla = d.workload.find((w) => w.name === 'Carla - QA');
+  assert.deepStrictEqual([ley.total, ley['In Progress'], ley.pointsReceived, ley.reviewsGiven], [2, 2, 1, 0]);
+  assert.deepStrictEqual([carla.total, carla['Completed'], carla['Discarded'], carla.completedInPeriod, carla.reviewsGiven], [2, 1, 1, 1, 1]);
+  assert.strictEqual(d.workload[d.workload.length - 1].name, 'Unassigned');
+  assert.deepStrictEqual({ ...d.activity }, { completed: 1, statusChanges: 5, reviewPoints: 1, blockers: 1 });
+  assert.deepStrictEqual(Array.from(d.stuck, (i) => i.id).sort(), ['20001', '20002'], 'in one status for 2+ working days');
+  assert.deepStrictEqual(Array.from(d.hpOpen, (i) => i.id), ['20001']);
+  const rp = d.statusRows.find((r) => r.name === 'Review Points');
+  assert.deepStrictEqual([rp.bugs, rp.stories, rp.total], [1, 0, 1]);
+
+  const out = g.ctx.buildReport({ quarter: 'Q4 2026', from: '2026-11-01', to: '2026-11-07', actorName: 'Tessa - QA' });
+  assert.match(out.html, /AXO Monitoring Report/);
+  assert.match(out.html, /Q4 2026 &middot; activity from Nov 1, 2026 to Nov 7, 2026/);
+  assert.match(out.html, /creds &lt;expired&gt;/, 'note text is escaped');
+  assert.match(out.html, /All AXOs in Q4 2026 \(5\)/);
+  assert.strictEqual(out.filename, 'CCQA-AXO-Report_Q4-2026_2026-11-01_to_2026-11-07.pdf');
+  assert.doesNotMatch(g.ctx.buildReport({ quarter: 'Q4 2026', includeList: false }).html, /All AXOs in Q4 2026/);
+
+  // Nothing completed outside the period; all quarters widen the scope
+  assert.strictEqual(g.ctx.reportData_({ quarter: 'Q4 2026', from: '2026-10-01', to: '2026-10-31' }).activity.completed, 0);
+  assert.strictEqual(g.ctx.reportData_({ quarter: '' }).total, 6);
+  assert.deepStrictEqual([g.ctx.reportData_({ quarter: 'Q4 2026' }).options.from, g.ctx.reportData_({ quarter: 'Q4 2026' }).options.to],
+    ['2026-10-01', '2026-12-31'], 'defaults to the whole quarter');
+  assert.throws(() => g.ctx.reportData_({ quarter: 'Q9 2026' }), /Quarter must look like/);
+  assert.throws(() => g.ctx.reportData_({ from: '2026-11-07', to: '2026-11-01' }), /start date is after/);
+
+  const pdf = g.ctx.reportPdf({ quarter: 'Q4 2026' });
+  assert.match(pdf.filename, /\.pdf$/);
+  assert.match(Buffer.from(pdf.base64, 'base64').toString(), /^%PDF-fake[\s\S]*AXO Monitoring Report/);
+});
+
+test('bootstrap carries what the new screens need', () => {
+  const g = fresh({ props: { DELETE_PASSCODE: 'pw' } });
+  g.ctx.importCsv(CSV, 'x');
+  const lists = g.ss.getSheetByName('Lists');
+  const head = lists.dump()[0];
+  lists.set(2, head.indexOf('Email To') + 1, 'kath@example.com');
+  lists.set(3, head.indexOf('Email To') + 1, 'jhopet@example.com');
+  lists.set(2, head.indexOf('Email CC') + 1, 'ccqa@example.com');
+  g.ctx.updateItem('20001', { handler: 'Ley - QA' }, 'x');
+  g.ctx.setReviewPoints('20001', 'p', 'Carla - QA');
+  const boot = g.ctx.getBootstrap();
+  assert.deepStrictEqual(Array.from(boot.emailTo), ['kath@example.com', 'jhopet@example.com']);
+  assert.deepStrictEqual(Array.from(boot.emailCc), ['ccqa@example.com']);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(boot.reviews)), [{ id: '20001', by: 'Carla - QA' }]);
+  assert.strictEqual(boot.deleteEnabled, true);
+  assert.match(boot.today, /^\d{4}-\d{2}-\d{2}$/);
+  assert.match(boot.appUrl, /\/exec$/);
+});

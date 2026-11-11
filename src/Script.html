@@ -4,7 +4,8 @@
 
   var S = {
     items: [], byId: {}, noteCounts: {}, lists: {}, statuses: [], statusMap: {},
-    sort: { key: 'id', dir: -1 }, openId: null, pending: 0, loadedAt: 0, email: ''
+    sort: { key: 'id', dir: -1 }, openId: null, pending: 0, loadedAt: 0, email: '',
+    selected: {}, visible: [], reviews: [], nudgeStatuses: [], nudgeAfter: 2
   };
   var $ = function (id) { return document.getElementById(id); };
   var GROUPS = ['Not Started', 'In Progress', 'Completed', 'Discarded'];
@@ -93,6 +94,15 @@
       S.slack = data.slackEnabled;
       S.slackDm = data.slackDm;
       S.currentQuarter = data.currentQuarter;
+      S.slackTokenIssue = data.slackTokenIssue || '';
+      S.reviews = data.reviews || [];
+      S.today = data.today;
+      S.nudgeStatuses = data.nudgeStatuses || [];
+      S.nudgeAfter = data.nudgeAfterDays || 2;
+      S.deleteEnabled = data.deleteEnabled;
+      S.appUrl = data.appUrl || '';
+      S.emailTo = data.emailTo || [];
+      S.emailCc = data.emailCc || [];
       S.loadedAt = Date.now();
       if (initial) setupControls(data);
       renderLede(data);
@@ -112,6 +122,7 @@
       parts.push('no import yet: start with <b>Import AXO CSV</b>');
     }
     parts.push('Slack ' + (data.slackEnabled ? 'notifications on' : 'not connected'));
+    if (data.slackTokenIssue) parts.push('<span class="warn">Slack DMs are off: ' + esc(data.slackTokenIssue) + '</span>');
     $('lede').innerHTML = parts.join(' · ');
     if (data.sheetUrl) $('sheet-link').innerHTML = '<a href="' + esc(data.sheetUrl) + '" target="_blank" rel="noopener" style="color:var(--brand)">Open the Google Sheet</a>';
   }
@@ -179,13 +190,17 @@
   }
 
   // ------------------------------------------------------------ filters
-  var FILTER_IDS = ['f-q', 'f-cat', 'f-type', 'f-status', 'f-handler', 'f-prio', 'f-hp', 'f-gone'];
+  var FILTER_IDS = ['f-q', 'f-cat', 'f-type', 'f-status', 'f-handler', 'f-prio', 'f-hp', 'f-stuck', 'f-gone'];
   function readFilters() {
     return {
       q: $('f-q').value.trim().toLowerCase(), cat: $('f-cat').value, type: $('f-type').value,
       status: $('f-status').value, handler: $('f-handler').value, prio: $('f-prio').value,
-      hp: $('f-hp').checked, gone: $('f-gone').checked
+      hp: $('f-hp').checked, gone: $('f-gone').checked, stuck: $('f-stuck').checked
     };
+  }
+  /** In a status that gets nudged, for the nudge threshold or longer. */
+  function isStuck(i) {
+    return i.daysInStatus != null && i.daysInStatus >= S.nudgeAfter && S.nudgeStatuses.indexOf(i.status) >= 0;
   }
   function saveFilters() {
     try { localStorage.setItem('ccqa.filters', JSON.stringify(readFilters())); } catch (e) {}
@@ -196,7 +211,7 @@
     if (!f) return;
     $('f-q').value = f.q || ''; $('f-cat').value = f.cat || ''; $('f-type').value = f.type || '';
     $('f-status').value = f.status || ''; $('f-handler').value = f.handler || ''; $('f-prio').value = f.prio || '';
-    $('f-hp').checked = !!f.hp; $('f-gone').checked = !!f.gone;
+    $('f-hp').checked = !!f.hp; $('f-gone').checked = !!f.gone; $('f-stuck').checked = !!f.stuck;
   }
   function matches(i, f) {
     if (f.q) {
@@ -208,6 +223,7 @@
     if (f.prio === '(none)' ? !!i.priority : (f.prio && i.priority !== f.prio)) return false;
     if (f.hp && !i.highPriority) return false;
     if (f.gone && i.inLatestImport) return false;
+    if (f.stuck && !isStuck(i)) return false;
     if (f.status) {
       var g = group(i.status);
       if (f.status === '__open' && g !== 'Not Started' && g !== 'In Progress') return false;
@@ -224,28 +240,31 @@
   function render() {
     renderKpis();
     renderBreakdown();
+    renderWorkload();
     renderTable();
   }
 
   function renderKpis() {
     var scope = scoped();
-    var c = { total: scope.length, 'Not Started': 0, 'In Progress': 0, Completed: 0, Discarded: 0, hp: 0, unassigned: 0 };
+    var c = { total: scope.length, 'Not Started': 0, 'In Progress': 0, Completed: 0, Discarded: 0, hp: 0, unassigned: 0, stuck: 0 };
     scope.forEach(function (i) {
       var g = group(i.status);
       c[g]++;
       var open = g === 'Not Started' || g === 'In Progress';
       if (open && i.highPriority) c.hp++;
       if (open && !i.handler) c.unassigned++;
+      if (isStuck(i)) c.stuck++;
     });
     var f = readFilters();
     var tiles = [
-      { label: 'Total', val: c.total, sub: selectedQuarter() || 'all quarters', tone: 'brand', key: 'all', on: !f.status && !f.hp && !f.handler },
+      { label: 'Total', val: c.total, sub: selectedQuarter() || 'all quarters', tone: 'brand', key: 'all', on: !f.status && !f.hp && !f.handler && !f.stuck },
       { label: 'Not started', val: c['Not Started'], sub: 'no status yet', tone: 'neu', key: 'g:Not Started', on: f.status === 'g:Not Started' },
       { label: 'In progress', val: c['In Progress'], sub: 'QA, BA/DEV, review', tone: 'sky', key: 'g:In Progress', on: f.status === 'g:In Progress' },
       { label: 'Completed', val: c.Completed, sub: 'Done + For Upload', tone: 'ok', key: 'g:Completed', on: f.status === 'g:Completed' },
       { label: 'Discarded', val: c.Discarded, sub: 'Moved + Withdraw', tone: 'neu', key: 'g:Discarded', on: f.status === 'g:Discarded' },
       { label: 'High priority open', val: c.hp, sub: 'not completed', tone: 'bad', key: 'hp', on: f.hp && f.status === '__open' },
-      { label: 'Unassigned open', val: c.unassigned, sub: 'no handler', tone: 'orange', key: 'unassigned', on: f.handler === '__none' && f.status === '__open' }
+      { label: 'Unassigned open', val: c.unassigned, sub: 'no handler', tone: 'orange', key: 'unassigned', on: f.handler === '__none' && f.status === '__open' },
+      { label: S.nudgeAfter + '+ days in status', val: c.stuck, sub: 'working days, no change', tone: c.stuck ? 'bad' : 'neu', key: 'stuck', on: f.stuck }
     ];
     $('kpis').innerHTML = tiles.map(function (t) {
       return '<button type="button" class="kpi t-' + t.tone + '" data-kpi="' + t.key + '" aria-pressed="' + !!t.on + '">' +
@@ -269,8 +288,47 @@
     }).join('');
   }
 
+  // ------------------------------------------------------------ QA workload
+  function renderWorkload() {
+    var scope = scoped(), rows = {}, inScope = {};
+    var row = function (k) {
+      return rows[k] = rows[k] || { name: k, total: 0, 'Not Started': 0, 'In Progress': 0, Completed: 0, Discarded: 0, reviews: 0 };
+    };
+    scope.forEach(function (i) { inScope[i.id] = true; var r = row(i.handler || ''); r.total++; r[group(i.status)]++; });
+    S.reviews.forEach(function (rv) { if (inScope[rv.id] && rv.by) row(rv.by).reviews++; });
+    var list = Object.keys(rows).map(function (k) { return rows[k]; }).sort(function (a, b) {
+      if (!a.name) return 1;
+      if (!b.name) return -1;
+      return b.total - a.total || (a.name < b.name ? -1 : 1);
+    });
+    if (!list.length) { $('workload').innerHTML = '<div class="wl-empty">No AXOs in this view yet.</div>'; return; }
+    var max = Math.max.apply(null, list.map(function (r) { return r.total; })) || 1;
+    var picked = $('f-handler').value;
+    $('workload').innerHTML = list.map(function (r) {
+      var seg = function (cls, n) { return n ? '<i class="' + cls + '" style="flex:' + n + '"></i>' : ''; };
+      var open = r['Not Started'] + r['In Progress'];
+      var key = r.name || '__none';
+      return '<button type="button" class="wl-row' + (r.name ? '' : ' unassigned') + '" data-handler="' + esc(key) + '" aria-pressed="' + (picked === key) + '" title="' +
+        esc((r.name || 'Unassigned') + ': ' + r['In Progress'] + ' in progress, ' + r['Not Started'] + ' not started, ' + r.Completed + ' completed, ' + r.Discarded + ' discarded') + '">' +
+        '<span class="wl-name">' + esc(r.name || 'Unassigned') + '</span>' +
+        '<span class="wl-track"><span class="wl-bar" style="width:' + (r.total / max * 100) + '%">' +
+          seg('g-ip', r['In Progress']) + seg('g-ns', r['Not Started']) + seg('g-co', r.Completed) + seg('g-di', r.Discarded) + '</span></span>' +
+        '<span class="wl-num"><b>' + r.total + '</b>' + open + ' open · ' + r.Completed + ' done' +
+          (r.reviews ? ' · <span class="rv">' + r.reviews + ' review' + (r.reviews > 1 ? 's' : '') + ' given</span>' : '') + '</span></button>';
+    }).join('');
+  }
+
+  function daysCell(i) {
+    if (i.daysInStatus == null) return '<span class="days" title="Finished">—</span>';
+    var n = i.daysInStatus;
+    var cls = isStuck(i) ? (n >= 5 ? ' late' : ' warn') : '';
+    return '<span class="days' + cls + '" title="' + esc((i.status || 'Not started') + ' since ' + fmtWhen(i.statusSince) + '. Working days, Tuesday to Saturday.') + '">' +
+      n + (n === 1 ? ' day' : ' days') + '</span>';
+  }
+
   function sortVal(i, k) {
     if (k === 'id') return +i.id || 0;
+    if (k === 'daysInStatus') return i.daysInStatus == null ? -1 : i.daysInStatus;
     if (k === 'notes') return S.noteCounts[i.id] || 0;
     if (k === 'highPriority') return i.highPriority ? 1 : 0;
     if (k === 'priority') return { High: 3, Medium: 2, Low: 1 }[i.priority] || 0;
@@ -285,7 +343,9 @@
     var stOpts = '<option value="">Not started</option>' + S.statuses.map(function (s) {
       return '<option' + (s.name === i.status ? ' selected' : '') + '>' + esc(s.name) + '</option>';
     }).join('');
-    return '<tr data-id="' + esc(i.id) + '"' + (i.highPriority ? ' class="is-hp"' : '') + '>' +
+    var sel = !!S.selected[i.id];
+    return '<tr data-id="' + esc(i.id) + '" class="' + (i.highPriority ? 'is-hp' : '') + (sel ? ' is-sel' : '') + '">' +
+      '<td class="c-sel"><input type="checkbox" class="sel-box" aria-label="Select AXO ' + esc(i.id) + '"' + (sel ? ' checked' : '') + '></td>' +
       '<td><button type="button" class="id-link" data-open="' + esc(i.id) + '">' + esc(i.id) + '</button>' +
         (S.quarter === 'all' && i.quarter ? '<span class="q-tag">' + esc(i.quarter) + '</span>' : '') + '</td>' +
       '<td><span class="type ' + (i.itemType === 'Bug' ? 'bug' : 'story') + '">' + esc(i.itemType) + '</span></td>' +
@@ -296,6 +356,7 @@
       '<td><select class="cell-sel" data-field="system" aria-label="System">' + options(S.lists.systems, i.system, '—') + '</select></td>' +
       '<td><select class="cell-sel" data-field="handler" aria-label="Handler">' + options(S.lists.handlers, i.handler, 'Unassigned') + '</select></td>' +
       '<td><select class="cell-sel status-sel' + (i.status ? '' : ' none') + '" data-field="status" aria-label="Status" style="' + statusStyle(i.status) + '">' + stOpts + '</select></td>' +
+      '<td>' + daysCell(i) + '</td>' +
       '<td><input type="date" class="cell-date" data-field="completedOn" aria-label="Date of completion" value="' + esc(i.completedOn) + '"></td>' +
       '<td><button type="button" class="notes-btn' + (n ? ' has' : '') + '" data-open="' + esc(i.id) + '" data-focus="notes">' + (n ? n + ' note' + (n > 1 ? 's' : '') : 'Add note') + '</button></td>' +
       '</tr>';
@@ -337,11 +398,38 @@
       if (th.dataset.sort === k) { th.setAttribute('aria-sort', d > 0 ? 'ascending' : 'descending'); th.querySelector('.arr').textContent = d > 0 ? '▴' : '▾'; }
       else { th.removeAttribute('aria-sort'); th.querySelector('.arr').textContent = '▾'; }
     });
+    // Selection only ever covers rows on screen, so "Delete selected" can't hit hidden AXOs.
+    S.visible = rows.map(function (i) { return i.id; });
+    var keep = {};
+    S.visible.forEach(function (id) { if (S.selected[id]) keep[id] = true; });
+    S.selected = keep;
+    updateSelBar();
     $('tbody').innerHTML = rows.length ? rows.map(rowHtml).join('') :
-      '<tr><td colspan="11" class="empty">' + (scope.length ? 'No items match these filters.' :
+      '<tr><td colspan="13" class="empty">' + (scope.length ? 'No items match these filters.' :
         S.items.length ? 'No AXOs tagged ' + esc(selectedQuarter()) + ' yet.' : 'No items yet. Import the AXO CSV export to get started.') + '</td></tr>';
     var where = selectedQuarter() ? ' in ' + selectedQuarter() : '';
     $('count').textContent = (rows.length === scope.length ? scope.length : rows.length + ' of ' + scope.length) + ' items' + where;
+  }
+
+  function updateSelBar() {
+    var n = Object.keys(S.selected).length, total = S.visible.length;
+    $('selbar').hidden = !n;
+    $('sel-count').textContent = n + ' selected';
+    $('sel-all').hidden = n >= total;
+    $('sel-all').textContent = 'Select all ' + total + ' in this view';
+    $('sel-delete').textContent = 'Delete ' + (n === S.items.length && n > 1 ? 'ALL ' + n : n === 1 ? '1 AXO' : n + ' AXOs');
+    var head = $('sel-head');
+    head.checked = total > 0 && n >= total;
+    head.indeterminate = n > 0 && n < total;
+  }
+  function selectAllVisible(on) {
+    S.selected = {};
+    if (on) S.visible.forEach(function (id) { S.selected[id] = true; });
+    document.querySelectorAll('#tbody tr[data-id]').forEach(function (tr) {
+      tr.classList.toggle('is-sel', on);
+      tr.querySelector('.sel-box').checked = on;
+    });
+    updateSelBar();
   }
 
   function replaceRow(id, flash) {
@@ -367,23 +455,26 @@
       return;
     }
     item[field] = value;
+    var prevDays = item.daysInStatus;
+    if (field === 'status') item.daysInStatus = value === 'Done' || value === 'Moved' || value === 'Withdraw' ? null : 0;
     var patch = {}; patch[field] = value;
     replaceRow(id);
-    renderKpis(); renderBreakdown();
+    renderKpis(); renderBreakdown(); renderWorkload();
     busy(1);
     return call('updateItem', id, patch, me()).then(function (fresh) {
       busy(-1);
       Object.assign(item, fresh);
       replaceRow(id, true);
-      renderKpis(); renderBreakdown();
+      renderKpis(); renderBreakdown(); renderWorkload();
       if (S.openId === id) fillDrawerFields(item, field);
       if (S.openId === id) loadDetail(id);
       return fresh;
     }).catch(function (e) {
       busy(-1);
       item[field] = prev;
+      item.daysInStatus = prevDays;
       replaceRow(id);
-      renderKpis(); renderBreakdown();
+      renderKpis(); renderBreakdown(); renderWorkload();
       if (S.openId === id) fillDrawerFields(item);
       failSync(e.message);
     });
@@ -446,6 +537,11 @@
     var st = $('d-status');
     st.setAttribute('style', statusStyle(item.status) + (item.status ? ';font-weight:700' : ''));
     $('d-rp').hidden = item.status !== 'Review Points';
+    var dl = $('d-days');
+    dl.className = 'dis-line' + (isStuck(item) ? ' warn' : '');
+    dl.innerHTML = item.daysInStatus == null ? '' : '<b>' + item.daysInStatus + ' working day' + (item.daysInStatus === 1 ? '' : 's') + '</b> in ' +
+      esc(item.status || 'Not started') + (item.statusSince ? ', since ' + esc(fmtWhen(item.statusSince)) : '') +
+      (isStuck(item) ? '. The handler gets a Slack nudge.' : '');
   }
 
   function loadDetail(id) {
@@ -494,14 +590,20 @@
   }
   function showErr(id, msg) { $(id).textContent = msg; $(id).hidden = false; }
 
-  function runImport() {
+  var lastImport = null;
+  function runImport(readd) {
+    if (readd === true) importText = lastImport; else readd = false;
     if (!importText) return;
     $('import-go').disabled = true;
     $('import-go').textContent = 'Importing…';
-    call('importCsv', importText, me(), $('import-quarter').value).then(function (res) {
+    var text = importText, quarter = $('import-quarter').value;
+    call('importCsv', text, me(), quarter, !!readd).then(function (res) {
       $('import-result').hidden = false;
       $('import-result').innerHTML = '<b>' + res.added + '</b> new (tagged ' + esc(res.quarter) + '), <b>' + res.updated + '</b> updated, ' + res.unchanged + ' unchanged' +
-        (res.dropped ? ', ' + res.dropped + ' no longer in the export (kept, flagged)' : '') + '.';
+        (res.dropped ? ', ' + res.dropped + ' no longer in the export (kept, flagged)' : '') + '.' +
+        (res.skippedDeleted ? '<br><b>' + res.skippedDeleted + '</b> skipped because ' + (res.skippedDeleted === 1 ? 'it was' : 'they were') +
+          ' deleted from the tracker earlier.<button type="button" class="btn btn-sm" id="import-readd">Import ' + (res.skippedDeleted === 1 ? 'it' : 'them') + ' again</button>' : '');
+      lastImport = res.skippedDeleted ? text : null;
       importText = null;
       $('import-go').textContent = 'Import';
       $('drop-title').textContent = 'Drop another CSV or click to choose';
@@ -539,14 +641,225 @@
     to.className = 'rp-to' + (dmReady ? '' : ' warn');
     to.innerHTML = !h ? 'This AXO has no handler. Points are saved' + (S.slack ? ' and posted to the channel.' : '.') :
       dmReady ? 'Sent to <b>' + esc(h) + '</b> as a Slack DM and saved in the notes.' :
-      S.slack ? '<b>' + esc(h) + '</b> can’t be DMed yet (' + (S.slackDm ? 'no Slack ID in the Lists tab' : 'Slack bot token not set') + '). Points will post to the channel with a mention.' :
+      S.slack ? '<b>' + esc(h) + '</b> can’t be DMed yet (' + (S.slackDm ? 'no Slack ID in the Lists tab' : S.slackTokenIssue ? 'the Slack token saved is not the bot token' : 'Slack bot token not set') + '). Points will post to the channel with a mention.' :
       'Slack isn’t connected. Points are saved in the notes only.';
     $('rp-dlg').showModal();
     $('rp-text').focus();
   }
 
+  // ------------------------------------------------------------ delete
+  var delIds = [];
+  function openDelete() {
+    delIds = Object.keys(S.selected);
+    if (!delIds.length) return;
+    var n = delIds.length, all = n === S.items.length && n > 1;
+    $('del-title').textContent = all ? 'Delete ALL ' + n + ' AXOs?' : 'Delete ' + (n === 1 ? 'this AXO?' : 'these ' + n + ' AXOs?');
+    var shown = delIds.slice(0, 8).map(function (id) { return '<li><b>' + esc(id) + '</b>' + esc(S.byId[id] ? S.byId[id].name : '') + '</li>'; });
+    if (n > 8) shown.push('<li class="more">and ' + (n - 8) + ' more</li>');
+    $('del-list').innerHTML = shown.join('');
+    $('del-pass').value = ''; $('del-confirm').value = '';
+    $('del-confirm-wrap').hidden = n < 10;
+    $('del-go').textContent = 'Delete ' + (all ? 'ALL ' + n : n === 1 ? '1 AXO' : n + ' AXOs');
+    $('del-go').disabled = false;
+    $('del-err').hidden = true;
+    if (!S.deleteEnabled) {
+      showErr('del-err', 'Deleting is switched off until the tracker owner sets a delete passcode (DELETE_PASSCODE in the script settings).');
+      $('del-go').disabled = true;
+    } else if (!me()) {
+      showErr('del-err', 'Pick your name in the top bar first, so the delete is logged under it.');
+      $('del-go').disabled = true;
+    }
+    $('del-dlg').showModal();
+    $('del-pass').focus();
+  }
+
+  function runDelete() {
+    if (!$('del-confirm-wrap').hidden && $('del-confirm').value.trim() !== 'DELETE') {
+      showErr('del-err', 'Type DELETE in capitals to confirm.');
+      return;
+    }
+    $('del-go').disabled = true;
+    $('del-err').hidden = true;
+    busy(1);
+    call('deleteItems', delIds, $('del-pass').value, me()).then(function (res) {
+      busy(-1);
+      var gone = {};
+      res.deleted.forEach(function (id) { gone[id] = true; });
+      if (S.openId && gone[S.openId]) closeDrawer();
+      S.items = S.items.filter(function (i) { return !gone[i.id]; });
+      res.deleted.forEach(function (id) { delete S.byId[id]; });
+      S.selected = {};
+      $('del-dlg').close();
+      renderQuarters(); render();
+      toast(res.deleted.length + ' AXO' + (res.deleted.length === 1 ? '' : 's') + ' moved to the Deleted tab');
+    }).catch(function (e) {
+      busy(-1);
+      $('del-go').disabled = false;
+      showErr('del-err', e.message);
+    });
+  }
+
+  // ------------------------------------------------------------ email (Outlook draft)
+  function mailText(item) {
+    var first = function (name) { return String(name || '').replace(/\s*-\s*QA$/i, ''); };
+    var clip = function (t) { t = String(t || '').trim(); return t.length > 400 ? t.slice(0, 400) + '…' : t; };
+    var lines = [
+      'Hi,', '',
+      'AXO ' + item.id + ': ' + item.name, '',
+      'Item Type: ' + item.itemType,
+      'AXO Category: ' + (item.axoCategory || '-'),
+      'Priority: ' + (item.priority || '-') + (item.highPriority ? ' (High Priority)' : ''),
+      'Workflow Step: ' + (item.workflowStep || '-'),
+      'Developer: ' + (item.developer || '-'),
+      'BA: ' + (item.reportedBy || '-'),
+      'Quarter: ' + (item.quarter || '-'),
+      'System: ' + (item.system || '-'),
+      'Handler: ' + (item.handler || 'Unassigned'),
+      'Status: ' + (item.status || 'Not started') + (item.daysInStatus != null ? ' (' + item.daysInStatus + ' working day' + (item.daysInStatus === 1 ? '' : 's') + ')' : ''),
+      'Date of Completion: ' + (item.completedOn || '-')
+    ];
+    if (item.commentDev) lines.push('', 'Comment/Note (DEV):', clip(item.commentDev));
+    if (item.commentSed) lines.push('', 'Comment/Note (SED):', clip(item.commentSed));
+    if (S.appUrl) lines.push('', 'Tracker: ' + S.appUrl + '?axo=' + encodeURIComponent(item.id));
+    lines.push('', 'Thanks,', first(me()) || '');
+    return lines.join('\n');
+  }
+
+  function mailLinks() {
+    var list = function (v) { return v.split(/[;,\s]+/).filter(Boolean); };
+    var to = list($('mail-to').value), cc = list($('mail-cc').value);
+    var subject = $('mail-subject').value, body = $('mail-body').value;
+    var addr = function (a) { return a.map(function (x) { return encodeURIComponent(x).replace(/%40/g, '@'); }).join(';'); };
+    // Outlook separates recipients with semicolons; line breaks must be CRLF in a mailto link.
+    var app = 'mailto:' + addr(to) + '?' + (cc.length ? 'cc=' + addr(cc) + '&' : '') +
+      'subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body.replace(/\r?\n/g, '\r\n'));
+    var web = 'https://outlook.office.com/mail/deeplink/compose?to=' + encodeURIComponent(to.join(';')) +
+      (cc.length ? '&cc=' + encodeURIComponent(cc.join(';')) : '') +
+      '&subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+    $('mail-app').href = app;
+    $('mail-web').href = web;
+    var hint = $('mail-hint');
+    hint.className = 'rp-to';
+    if (!to.length) {
+      hint.className = 'rp-to warn';
+      hint.textContent = 'No recipients yet. Type them here, or set the defaults once in the Lists tab of the Google Sheet (Email To and Email CC columns).';
+    } else if (app.length > 1900) {
+      hint.className = 'rp-to warn';
+      hint.textContent = 'This is a long message. If Outlook opens it cut short, use Copy text and paste it into the email.';
+    } else {
+      hint.textContent = 'Nothing is sent from here: Outlook opens with this draft and you click Send.';
+    }
+  }
+
+  function openMail(id) {
+    var item = S.byId[id];
+    if (!item) return;
+    $('mail-to').value = S.emailTo.join('; ');
+    $('mail-cc').value = S.emailCc.join('; ');
+    $('mail-subject').value = 'AXO ' + item.id + ' | ' + (item.status || 'Not started') + ' | ' + item.name;
+    $('mail-body').value = mailText(item);
+    mailLinks();
+    $('mail-dlg').showModal();
+  }
+
+  // ------------------------------------------------------------ report
+  function qRange(label) {
+    var m = /^Q([1-4]) (\d{4})$/.exec(label || '');
+    if (!m) return null;
+    var q = +m[1], y = +m[2], pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    return { from: y + '-' + pad(q * 3 - 2) + '-01', to: y + '-' + pad(q * 3) + '-' + pad(new Date(y, q * 3, 0).getDate()) };
+  }
+  function shiftDay(day, delta) {
+    var p = day.split('-'), d = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2] + delta));
+    return d.toISOString().slice(0, 10);
+  }
+  function reportOpts() {
+    return { quarter: $('rep-scope').value, from: $('rep-from').value, to: $('rep-to').value, includeList: $('rep-list').checked, actorName: me() };
+  }
+  function setReportRange(preset) {
+    var today = S.today, from = today, to = today, r = qRange($('rep-scope').value);
+    if (preset === 'quarter' && r) { from = r.from; to = r.to < today ? r.to : (r.from > today ? r.to : today); }
+    else if (preset === 'quarter') { from = shiftDay(today, -89); }
+    else if (preset === '7') { from = shiftDay(today, -6); }
+    else if (preset === 'month') { from = today.slice(0, 8) + '01'; }
+    else if (preset === 'week') {
+      // The team's week starts on Tuesday.
+      var p = today.split('-'), dow = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])).getUTCDay();
+      from = shiftDay(today, -((dow - 2 + 7) % 7));
+    }
+    $('rep-from').value = from; $('rep-to').value = to;
+  }
+  var reportSeq = 0;
+  function loadReport() {
+    var seq = ++reportSeq, paper = $('report-paper');
+    $('rep-dl').hidden = true;
+    paper.innerHTML = '<div class="rep-msg">Building the report…</div>';
+    call('buildReport', reportOpts()).then(function (res) {
+      if (seq !== reportSeq) return;
+      paper.innerHTML = res.html;
+    }).catch(function (e) {
+      if (seq !== reportSeq) return;
+      paper.innerHTML = '<div class="rep-msg">Could not build the report: ' + esc(e.message) + '</div>';
+    });
+  }
+  function openReport() {
+    $('rep-scope').innerHTML = '<option value="">All quarters</option>' + quarterOptions(selectedQuarter());
+    if (!selectedQuarter()) $('rep-scope').value = '';
+    setReportRange('quarter');
+    $('report-dlg').showModal();
+    loadReport();
+  }
+  function downloadPdf() {
+    var btn = $('rep-pdf');
+    btn.disabled = true; btn.textContent = 'Preparing PDF…';
+    call('reportPdf', reportOpts()).then(function (res) {
+      var bin = atob(res.base64), bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      var link = $('rep-dl-link');
+      if (link.href) URL.revokeObjectURL(link.href);
+      link.href = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+      link.download = res.filename;
+      link.textContent = res.filename;
+      $('rep-dl').hidden = false;
+      link.click();
+    }).catch(function (e) {
+      toast('Could not make the PDF: ' + e.message, true);
+    }).then(function () { btn.disabled = false; btn.textContent = 'Download PDF'; });
+  }
+
   // ------------------------------------------------------------ events
   function bind() {
+    // Selection + delete
+    $('sel-head').addEventListener('change', function (e) { selectAllVisible(e.target.checked); });
+    $('sel-all').addEventListener('click', function () { selectAllVisible(true); });
+    $('sel-clear').addEventListener('click', function () { selectAllVisible(false); });
+    $('sel-delete').addEventListener('click', openDelete);
+    $('del-cancel').addEventListener('click', function () { $('del-dlg').close(); });
+    $('del-form').addEventListener('submit', function (e) { e.preventDefault(); runDelete(); });
+
+    // Email
+    $('d-email').addEventListener('click', function () { if (S.openId) openMail(S.openId); });
+    ['mail-to', 'mail-cc', 'mail-subject', 'mail-body'].forEach(function (id) { $(id).addEventListener('input', mailLinks); });
+    $('mail-cancel').addEventListener('click', function () { $('mail-dlg').close(); });
+    $('mail-copy').addEventListener('click', function () {
+      var text = 'To: ' + $('mail-to').value + '\nCC: ' + $('mail-cc').value + '\nSubject: ' + $('mail-subject').value + '\n\n' + $('mail-body').value;
+      var done = function () { toast('Copied. Paste it into a new Outlook email.'); };
+      var fallback = function () { $('mail-body').select(); document.execCommand('copy'); done(); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+    });
+
+    // Report
+    $('report-btn').addEventListener('click', openReport);
+    $('rep-close').addEventListener('click', function () { $('report-dlg').close(); });
+    $('rep-scope').addEventListener('change', function () { setReportRange('quarter'); loadReport(); });
+    ['rep-from', 'rep-to', 'rep-list'].forEach(function (id) { $(id).addEventListener('change', loadReport); });
+    document.querySelector('.rep-presets').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-preset]');
+      if (b) { setReportRange(b.dataset.preset); loadReport(); }
+    });
+    $('rep-pdf').addEventListener('click', downloadPdf);
+    $('rep-print').addEventListener('click', function () { window.print(); });
+
     $('q-tabs').addEventListener('click', function (e) {
       var b = e.target.closest('[data-q]');
       if (!b) return;
@@ -573,8 +886,9 @@
         $('rp-dlg').close();
         Object.assign(S.byId[id], res.item);
         S.noteCounts[id] = (S.noteCounts[id] || 0) + 1;
+        S.reviews.push({ id: id, by: reviewer });
         replaceRow(id, true);
-        renderKpis(); renderBreakdown();
+        renderKpis(); renderBreakdown(); renderWorkload();
         if (S.openId === id) { fillDrawerFields(S.byId[id]); loadDetail(id); }
         var sl = res.slack || {};
         toast(sl.via === 'dm' ? 'Review points sent to ' + sl.to + ' on Slack' :
@@ -594,11 +908,22 @@
     });
 
     FILTER_IDS.forEach(function (id) {
-      $(id).addEventListener(id === 'f-q' ? 'input' : 'change', function () { saveFilters(); renderTable(); renderKpis(); });
+      $(id).addEventListener(id === 'f-q' ? 'input' : 'change', function () { saveFilters(); renderTable(); renderKpis(); renderWorkload(); });
     });
     $('f-clear').addEventListener('click', function () {
       FILTER_IDS.forEach(function (id) { var el = $(id); if (el.type === 'checkbox') el.checked = false; else el.value = ''; });
-      saveFilters(); renderTable(); renderKpis();
+      saveFilters(); renderTable(); renderKpis(); renderWorkload();
+    });
+
+    $('workload').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-handler]');
+      if (!b) return;
+      var sel = $('f-handler'), v = b.dataset.handler;
+      if (v !== '__none' && !Array.prototype.some.call(sel.options, function (o) { return o.value === v; })) {
+        sel.insertAdjacentHTML('beforeend', '<option>' + esc(v) + '</option>');
+      }
+      sel.value = sel.value === v ? '' : v;
+      saveFilters(); renderTable(); renderKpis(); renderWorkload();
     });
 
     $('kpis').addEventListener('click', function (e) {
@@ -606,9 +931,10 @@
       if (!b) return;
       var k = b.dataset.kpi;
       $('f-hp').checked = k === 'hp';
+      $('f-stuck').checked = k === 'stuck';
       $('f-handler').value = k === 'unassigned' ? '__none' : '';
       $('f-status').value = k.indexOf('g:') === 0 ? k : (k === 'hp' || k === 'unassigned' ? '__open' : '');
-      saveFilters(); renderTable(); renderKpis();
+      saveFilters(); renderTable(); renderKpis(); renderWorkload();
     });
 
     function statusClick(e) {
@@ -624,13 +950,19 @@
       var th = e.target.closest('th[data-sort]');
       if (!th) return;
       var k = th.dataset.sort;
-      S.sort = { key: k, dir: S.sort.key === k ? -S.sort.dir : (k === 'id' || k === 'notes' || k === 'priority' || k === 'highPriority' ? -1 : 1) };
+      S.sort = { key: k, dir: S.sort.key === k ? -S.sort.dir : (k === 'id' || k === 'notes' || k === 'priority' || k === 'highPriority' || k === 'daysInStatus' ? -1 : 1) };
       renderTable();
     });
 
     var tbody = $('tbody');
     tbody.addEventListener('change', function (e) {
       var el = e.target, tr = el.closest('tr[data-id]');
+      if (tr && el.classList.contains('sel-box')) {
+        if (el.checked) S.selected[tr.dataset.id] = true; else delete S.selected[tr.dataset.id];
+        tr.classList.toggle('is-sel', el.checked);
+        updateSelBar();
+        return;
+      }
       if (!tr || !el.dataset.field) return;
       save(tr.dataset.id, el.dataset.field, fieldValue(el));
     });
@@ -699,7 +1031,8 @@
       $('import-dlg').showModal();
     });
     $('import-cancel').addEventListener('click', function () { $('import-dlg').close(); });
-    $('import-go').addEventListener('click', runImport);
+    $('import-go').addEventListener('click', function () { runImport(false); });
+    $('import-result').addEventListener('click', function (e) { if (e.target.id === 'import-readd') runImport(true); });
     var drop = $('drop');
     drop.addEventListener('click', function () { $('file').click(); });
     drop.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('file').click(); } });
@@ -747,7 +1080,7 @@
       });
     }
   }).catch(function (e) {
-    $('tbody').innerHTML = '<tr><td colspan="11" class="empty">Could not load the tracker: ' + esc(e.message) + '</td></tr>';
+    $('tbody').innerHTML = '<tr><td colspan="13" class="empty">Could not load the tracker: ' + esc(e.message) + '</td></tr>';
     failSync(e.message);
   });
 })();

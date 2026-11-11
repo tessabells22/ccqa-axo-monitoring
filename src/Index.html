@@ -28,6 +28,7 @@
     </label>
     <span class="sync" id="sync"><i></i><span id="sync-text">Loading</span></span>
     <a class="help-link" href="https://claude.ai/artifact/XMLwLdnZzG1fUCznmcdA69" target="_blank" rel="noopener">How to use</a>
+    <button class="btn" id="report-btn" type="button">Report</button>
     <button class="btn" id="add-btn" type="button">Add item</button>
     <button class="btn btn-primary" id="import-btn" type="button">Import AXO CSV</button>
   </header>
@@ -47,11 +48,22 @@
 
     <div class="kpis" id="kpis"></div>
 
-    <section class="panel breakdown" aria-labelledby="bd-title">
-      <div class="breakdown-head"><h2 id="bd-title">Status breakdown</h2><span>Click a status to filter</span></div>
-      <div class="stack" id="stack"></div>
-      <div class="legend" id="legend"></div>
-    </section>
+    <div class="insights">
+      <section class="panel breakdown" aria-labelledby="bd-title">
+        <div class="breakdown-head"><h2 id="bd-title">Status breakdown</h2><span>Click a status to filter</span></div>
+        <div class="stack" id="stack"></div>
+        <div class="legend" id="legend"></div>
+      </section>
+
+      <section class="panel breakdown workload" aria-labelledby="wl-title">
+        <div class="breakdown-head"><h2 id="wl-title">QA workload</h2><span>AXOs per handler. Click a name to filter</span></div>
+        <div class="wl-key" aria-hidden="true">
+          <span><i class="g-ip"></i>In progress</span><span><i class="g-ns"></i>Not started</span>
+          <span><i class="g-co"></i>Completed</span><span><i class="g-di"></i>Discarded</span>
+        </div>
+        <div class="wl-list" id="workload"></div>
+      </section>
+    </div>
 
     <section class="panel">
       <div class="filters">
@@ -61,14 +73,23 @@
         <div class="field"><label for="f-status">Status</label><select id="f-status"></select></div>
         <div class="field"><label for="f-handler">Handler</label><select id="f-handler"></select></div>
         <div class="field"><label for="f-prio">Priority</label><select id="f-prio"><option value="">All</option><option>High</option><option>Medium</option><option>Low</option><option value="(none)">None set</option></select></div>
-        <label class="toggle"><input type="checkbox" id="f-hp">High priority only</label>
-        <label class="toggle"><input type="checkbox" id="f-gone">Not in latest import</label>
+        <label class="toggle"><input type="checkbox" id="f-hp">High priority</label>
+        <label class="toggle"><input type="checkbox" id="f-stuck">2+ days in status</label>
+        <label class="toggle"><input type="checkbox" id="f-gone">Not in latest export</label>
         <button class="btn btn-quiet" id="f-clear" type="button">Clear</button>
+      </div>
+      <div class="selbar" id="selbar" hidden>
+        <b id="sel-count"></b>
+        <button class="btn btn-sm btn-quiet" id="sel-all" type="button"></button>
+        <span class="grow"></span>
+        <button class="btn btn-sm" id="sel-clear" type="button">Clear selection</button>
+        <button class="btn btn-sm btn-danger" id="sel-delete" type="button">Delete selected</button>
       </div>
       <div class="table-scroll">
         <table>
           <thead>
             <tr>
+              <th class="c-sel"><input type="checkbox" id="sel-head" aria-label="Select every AXO in this view"></th>
               <th data-sort="id">ID<span class="arr">▾</span></th>
               <th data-sort="itemType">Item Type<span class="arr">▾</span></th>
               <th data-sort="name">Name<span class="arr">▾</span></th>
@@ -78,11 +99,12 @@
               <th data-sort="system">System<span class="arr">▾</span></th>
               <th data-sort="handler">Handler<span class="arr">▾</span></th>
               <th data-sort="status">Status<span class="arr">▾</span></th>
+              <th data-sort="daysInStatus" class="th-wrap" title="Working days (Tuesday to Saturday) the AXO has been in its current status">Days in Status<span class="arr">▾</span></th>
               <th data-sort="completedOn">Completed<span class="arr">▾</span></th>
               <th data-sort="notes">Notes<span class="arr">▾</span></th>
             </tr>
           </thead>
-          <tbody id="tbody"><tr><td colspan="11" class="loading">Loading items…</td></tr></tbody>
+          <tbody id="tbody"><tr><td colspan="13" class="loading">Loading items…</td></tr></tbody>
         </table>
       </div>
       <div class="table-foot"><span id="count"></span><span id="sheet-link"></span></div>
@@ -94,7 +116,8 @@
   <aside class="drawer" id="drawer" hidden aria-labelledby="d-title" role="dialog" aria-modal="true">
     <div class="d-head">
       <div class="d-top"><span class="mono" id="d-id"></span><span id="d-type"></span><span class="prio" id="d-prio"></span>
-        <button class="btn btn-sm" id="d-close" type="button">Close</button></div>
+        <span class="d-actions"><button class="btn btn-sm" id="d-email" type="button">Email</button>
+          <button class="btn btn-sm" id="d-close" type="button">Close</button></span></div>
       <h2 id="d-title"></h2>
       <div class="people" id="d-people"></div>
     </div>
@@ -113,6 +136,7 @@
           <label class="full"><span class="lbl-sed">Comment/Note (SED)</span><textarea id="d-csed" data-field="commentSed" placeholder="Current state in SED"></textarea></label>
         </div>
         <div class="saved-hint" id="d-saved" aria-live="polite"></div>
+        <div class="dis-line" id="d-days"></div>
         <div class="rp-cta" id="d-rp" hidden>In Review Points. Reviewers can add more points for the handler.
           <button class="btn btn-sm" type="button" id="d-rp-btn">Add review points</button></div>
       </section>
@@ -202,6 +226,66 @@
         <button class="btn btn-primary" type="submit" id="rp-send">Send review points</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- Delete -->
+  <dialog id="del-dlg">
+    <form id="del-form">
+      <div class="dlg-head"><h2 id="del-title">Delete AXOs</h2>
+        <p>They leave the tracker and move to the Deleted tab of the Google Sheet, where they can be restored. Their notes are kept.</p></div>
+      <div class="dlg-body">
+        <ul class="del-list" id="del-list"></ul>
+        <label class="dlg-field">Delete passcode<input type="password" id="del-pass" autocomplete="off" required></label>
+        <label class="dlg-field" id="del-confirm-wrap" hidden>Type DELETE to confirm<input id="del-confirm" autocomplete="off" spellcheck="false"></label>
+        <div class="dlg-err" id="del-err" hidden></div>
+      </div>
+      <div class="dlg-foot">
+        <button class="btn" type="button" id="del-cancel">Cancel</button>
+        <button class="btn btn-danger" type="submit" id="del-go">Delete</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Email -->
+  <dialog id="mail-dlg" class="dlg-wide">
+    <div class="dlg-head"><h2>Email this AXO</h2>
+      <p>Opens a new email in Outlook with everything below filled in. Check it there and click Send; it goes from your own work email.</p></div>
+    <div class="dlg-body">
+      <label class="dlg-field">To<input id="mail-to" spellcheck="false"></label>
+      <label class="dlg-field">CC<input id="mail-cc" spellcheck="false"></label>
+      <label class="dlg-field">Subject<input id="mail-subject"></label>
+      <label class="dlg-field">Message<textarea id="mail-body"></textarea></label>
+      <p class="rp-to" id="mail-hint"></p>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn" type="button" id="mail-cancel">Close</button>
+      <button class="btn" type="button" id="mail-copy">Copy text</button>
+      <a class="btn" id="mail-web" target="_blank" rel="noopener">Open in Outlook on the web</a>
+      <a class="btn btn-primary" id="mail-app" target="_blank" rel="noopener">Open in Outlook app</a>
+    </div>
+  </dialog>
+
+  <!-- Report -->
+  <dialog id="report-dlg">
+    <div class="report-bar">
+      <h2>Report</h2>
+      <div class="field"><label for="rep-scope">AXOs in</label><select id="rep-scope"></select></div>
+      <div class="field"><label for="rep-from">Activity from</label><input type="date" id="rep-from"></div>
+      <div class="field"><label for="rep-to">To</label><input type="date" id="rep-to"></div>
+      <div class="rep-presets" role="group" aria-label="Quick date ranges">
+        <button type="button" data-preset="quarter">Whole quarter</button>
+        <button type="button" data-preset="week">This week</button>
+        <button type="button" data-preset="7">Last 7 days</button>
+        <button type="button" data-preset="month">This month</button>
+      </div>
+      <label class="toggle"><input type="checkbox" id="rep-list" checked>Full AXO list</label>
+      <span class="grow"></span>
+      <button class="btn" type="button" id="rep-print">Print</button>
+      <button class="btn btn-primary" type="button" id="rep-pdf">Download PDF</button>
+      <button class="btn" type="button" id="rep-close">Close</button>
+    </div>
+    <div class="rep-dl" id="rep-dl" hidden>PDF ready: <a id="rep-dl-link"></a> <span class="muted">(click the name if the download didn't start)</span></div>
+    <div class="report-scroll"><div class="report-paper" id="report-paper"></div></div>
   </dialog>
 
   <div class="toast" id="toast" hidden role="status"></div>
