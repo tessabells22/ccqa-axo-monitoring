@@ -855,7 +855,8 @@
   function mailRefresh() {
     var d = mailMessage();
     if (!mail.edited) $('mail-body').value = d.text;
-    $('mail-preview').innerHTML = d.html;
+    // Show what will arrive: with the message filled in automatically, nothing is bold.
+    $('mail-preview').innerHTML = $('mail-auto').checked ? d.html.replace(/<\/?b>/g, '') : d.html;
     $('mail-preview').hidden = mail.edited;
     var r = mailRecipients();
     var hint = $('mail-hint');
@@ -866,6 +867,9 @@
     } else if (!$('mail-release').value.trim()) {
       hint.className = 'rp-to warn';
       hint.textContent = 'No release on ' + (mail.ids.length > 1 ? 'these AXOs' : 'this AXO') + ' yet. Type it here, or set it on the AXO (Release field) so it fills in next time.';
+    } else if ($('mail-auto').checked) {
+      hint.innerHTML = '<b>Open in Outlook on the web</b> opens a new email with To, CC, subject and the message already filled in. ' +
+        'The message comes in as plain text, so nothing is bold. Untick the box above to paste it with bold instead.';
     } else {
       hint.innerHTML = '<b>Open in Outlook on the web</b> opens a new email with To, CC and subject, and copies the message. ' +
         'Click in the message area and press <b>Ctrl+V</b> (<b>⌘V</b> on a Mac) to paste it with its bold text, in your own default font.';
@@ -884,6 +888,7 @@
     $('mail-greeting').value = store('ccqa.greeting') || 'Team';
     $('mail-subject').value = mailDraft(items, '', '').subject;
     $('mail-body').hidden = true;
+    $('mail-auto').checked = store('ccqa.mailAuto') === '1';
     $('mail-edit').hidden = false;
     mailRefresh();
     $('mail-dlg').showModal();
@@ -942,19 +947,26 @@
     });
   }
 
+  /** Opens the link in a new tab; says so if the browser blocked it. */
+  function openTab(url, pasteHint) {
+    // No 'noopener' feature here: with it, window.open always returns null and a blocked
+    // tab can't be told apart from an open one.
+    var win = window.open(url, '_blank');
+    if (win) { try { win.opener = null; } catch (e) {} return true; }
+    $('mail-hint').innerHTML = 'Your browser blocked the new tab. <a href="' + esc(url) + '" target="_blank" rel="noopener">Open Outlook on the web</a>' +
+      (pasteHint ? ', then paste the message (Ctrl+V).' : '.');
+    return false;
+  }
+
   function openOwa() {
+    if ($('mail-auto').checked) {
+      // The message goes in the link itself: filled in automatically, as plain text.
+      if (openTab(owaLink(true), false)) toast('Outlook opened with the message filled in. Attach the test file, then Send.');
+      return;
+    }
     copyMail().then(function (how) {
       // If the formatted copy failed, put the text in the link so the email isn't empty.
-      var url = owaLink(how !== 'rich');
-      // No 'noopener' feature here: with it, window.open always returns null and a blocked
-      // tab can't be told apart from an open one.
-      var win = window.open(url, '_blank');
-      if (win) { try { win.opener = null; } catch (e) {} }
-      if (!win) {
-        $('mail-hint').innerHTML = 'Your browser blocked the new tab. <a href="' + esc(url) + '" target="_blank" rel="noopener">Open Outlook on the web</a>' +
-          (how === 'rich' ? ', then paste the message (Ctrl+V).' : '.');
-        return;
-      }
+      if (!openTab(owaLink(how !== 'rich'), how === 'rich')) return;
       toast(how === 'rich' ? 'In Outlook, click in the message area and press Ctrl+V to paste the message.' :
         'Outlook opened with the message as plain text (this browser blocked the formatted copy).', how !== 'rich');
     });
@@ -1051,6 +1063,7 @@
       $('mail-body').focus();
     });
     $('mail-cancel').addEventListener('click', function () { $('mail-dlg').close(); });
+    $('mail-auto').addEventListener('change', function () { store('ccqa.mailAuto', $('mail-auto').checked ? '1' : '0'); mailRefresh(); });
     $('mail-copy').addEventListener('click', copyMessage);
     $('mail-eml').addEventListener('click', function () {
       var f = emlFile();

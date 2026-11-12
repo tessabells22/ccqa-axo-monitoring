@@ -109,6 +109,8 @@ Each AXO has a **Release** field (in its panel), holding the number only, for ex
 
 **Open in Outlook on the web** opens a new email with To, CC and subject filled in, and copies the message. Clicking in the message area and pressing Ctrl+V (⌘V on a Mac) pastes it with its bold text. The copied message sets no font, so it takes the person's Outlook default font. A link can only carry plain text, which is why the message is pasted rather than sent in the link. CC travels in the `mailtouri` part of the link, the form Outlook on the web uses for email links.
 
+**Fill in the message automatically** (a checkbox in the email box, remembered per browser) puts the message in the link instead, so it's already there when Outlook opens. A link can only carry plain text, so nothing is bold that way.
+
 **Copy message** copies the formatted text on its own. **Download .eml** is for the Outlook desktop app: opening the file there gives a new draft with To, CC and bold text.
 
 Nothing is sent by the tracker: the person attaches the test file and clicks Send, from their own work email. Sending with no draft step would need your Microsoft 365 admin to approve an app with permission to send mail (Microsoft Graph `Mail.Send`) or a Power Automate flow with a premium HTTP trigger.
