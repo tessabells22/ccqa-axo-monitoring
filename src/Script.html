@@ -5,7 +5,7 @@
   var S = {
     items: [], byId: {}, noteCounts: {}, lists: {}, statuses: [], statusMap: {},
     sort: { key: 'id', dir: -1 }, openId: null, pending: 0, loadedAt: 0, email: '',
-    selected: {}, visible: [], reviews: [], nudgeStatuses: [], nudgeAfter: 2
+    selected: {}, visible: [], reviews: [], nudgeStatuses: [], nudgeAfter: 2, notesById: {}
   };
   var $ = function (id) { return document.getElementById(id); };
   var GROUPS = ['Not Started', 'In Progress', 'Completed', 'Discarded'];
@@ -549,7 +549,7 @@
   }
 
   function fillDrawerFields(item, skipField) {
-    ['d-status', 'd-handler', 'd-system', 'd-cat', 'd-quarter', 'd-done', 'd-hp', 'd-cdev', 'd-csed'].forEach(function (id) {
+    ['d-status', 'd-handler', 'd-system', 'd-cat', 'd-quarter', 'd-done', 'd-hp'].forEach(function (id) {
       var el = $(id), f = el.dataset.field;
       if (f === skipField && document.activeElement === el) return;
       if (document.activeElement === el && el.tagName === 'TEXTAREA') return;
@@ -574,6 +574,7 @@
     return call('getItemDetail', id).then(function (d) {
       if (S.openId !== id) return;
       S.noteCounts[id] = d.notes.length;
+      S.notesById[id] = d.notes;
       $('notes').innerHTML = d.notes.length ? d.notes.map(noteHtml).join('') : '<li class="muted">No notes yet.</li>';
       $('activity').innerHTML = d.activity.length ? d.activity.map(function (a) {
         return '<li><b>' + esc(a.who.replace(/\s*<.*>$/, '')) + '</b> set ' + esc(a.field) +
@@ -741,8 +742,14 @@
       'Status: ' + (item.status || 'Not started') + (item.daysInStatus != null ? ' (' + item.daysInStatus + ' working day' + (item.daysInStatus === 1 ? '' : 's') + ')' : ''),
       'Date of Completion: ' + (item.completedOn || '-')
     ];
-    if (item.commentDev) lines.push('', 'Comment/Note (DEV):', clip(item.commentDev));
-    if (item.commentSed) lines.push('', 'Comment/Note (SED):', clip(item.commentSed));
+    // The three most recent team notes (the panel loads them when the AXO is opened).
+    var notes = (S.notesById[item.id] || []).slice(0, 3);
+    if (notes.length) {
+      lines.push('', 'Latest notes:');
+      notes.forEach(function (n) {
+        lines.push('- ' + fmtWhen(n.createdAt) + ', ' + n.author.replace(/\s*<.*>$/, '') + (n.kind !== 'General' ? ' (' + n.kind + ')' : '') + ': ' + clip(n.text));
+      });
+    }
     if (S.appUrl) lines.push('', 'Tracker: ' + S.appUrl + '?axo=' + encodeURIComponent(item.id));
     lines.push('', 'Thanks,', first(me()) || '');
     return lines.join('\n');
@@ -1009,12 +1016,9 @@
       if (o) openDrawer(o.dataset.open, o.dataset.focus === 'notes');
     });
 
-    // Drawer fields: selects/date save on change, textareas on blur.
+    // Drawer fields save as soon as they change.
     ['d-status', 'd-handler', 'd-system', 'd-cat', 'd-quarter', 'd-done', 'd-hp'].forEach(function (id) {
       $(id).addEventListener('change', function (e) { drawerSave(e.target); });
-    });
-    ['d-cdev', 'd-csed'].forEach(function (id) {
-      $(id).addEventListener('blur', function (e) { drawerSave(e.target); });
     });
     function drawerSave(el) {
       var id = S.openId;

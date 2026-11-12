@@ -64,7 +64,7 @@ test('import adds items with derived QA defaults and is idempotent', () => {
 test('re-import refreshes AXO fields but never QA fields', () => {
   const { ctx } = fresh();
   ctx.importCsv(CSV, 'x');
-  ctx.updateItem('20002', { status: 'Ongoing QA', handler: 'Ley - QA', commentDev: 'retest pending', axoCategory: 'SERPCAR' }, 'Ley - QA');
+  ctx.updateItem('20002', { status: 'Ongoing QA', handler: 'Ley - QA', system: 'DEV 800', axoCategory: 'SERPCAR' }, 'Ley - QA');
   const changed = CSV.replace('"1. New","1","130","Medium"', '"6. Add Test Cases","8","136","High"')
     .replace(/\n"20005"[\s\S]*$/, '\n');
   const s = ctx.importCsv(changed, 'x');
@@ -73,7 +73,7 @@ test('re-import refreshes AXO fields but never QA fields', () => {
   const b = items.find((i) => i.id === '20002');
   assert.strictEqual(b.workflowStep, '6. Add Test Cases');
   assert.strictEqual(b.priority, 'High');
-  assert.deepStrictEqual([b.status, b.handler, b.commentDev, b.axoCategory], ['Ongoing QA', 'Ley - QA', 'retest pending', 'SERPCAR']);
+  assert.deepStrictEqual([b.status, b.handler, b.system, b.axoCategory], ['Ongoing QA', 'Ley - QA', 'DEV 800', 'SERPCAR']);
   assert.strictEqual(items.find((i) => i.id === '20005').inLatestImport, false, 'missing items are kept but flagged');
 });
 
@@ -102,8 +102,8 @@ test('notes are stored per item and counted', () => {
   const { ctx } = fresh();
   ctx.importCsv(CSV, 'x');
   ctx.addNote('20001', 'General', 'first', 'Tessa - QA');
-  ctx.addNote('20001', 'DEV', 'second', 'Tessa - QA');
-  ctx.addNote('20003', 'SED', 'other', 'Ley - QA');
+  ctx.addNote('20001', 'Blocker', 'second', 'Tessa - QA');
+  ctx.addNote('20003', 'General', 'other', 'Ley - QA');
   assert.throws(() => ctx.addNote('20001', 'General', '   ', 'x'), /Write a note/);
   const d = ctx.getItemDetail('20001');
   assert.deepStrictEqual(Array.from(d.notes, (n) => n.text), ['second', 'first'], 'newest first');
@@ -445,7 +445,7 @@ test('an existing sheet is upgraded on first load without losing data', () => {
 
   g.setNow('2026-11-06T09:00:00+08:00');
   const boot = g.ctx.getBootstrap();
-  assert.strictEqual(g.props.SCHEMA_VERSION, '3');
+  assert.strictEqual(g.props.SCHEMA_VERSION, '4');
   assert.ok(g.ss.getSheetByName('Deleted'), 'Deleted tab created');
   const newLists = lists.dump()[0];
   assert.ok(newLists.includes('Email To') && newLists.includes('Email CC'));
@@ -545,4 +545,34 @@ test('every change needs a name, checked on the server too', () => {
   const item = g.ctx.getBootstrap().items.find((i) => i.id === '20001');
   assert.strictEqual(item.status, '', 'nothing was changed');
   assert.strictEqual(g.ctx.getBootstrap().items.length, 5, 'nothing was added or deleted');
+});
+
+test('DEV/SED comment boxes are retired: text moves to notes once, kinds are gone', () => {
+  const g = fresh();
+  g.ctx.importCsv(CSV, 'x');
+  assert.throws(() => g.ctx.updateItem('20001', { commentDev: 'x' }, 'x'), /cannot be edited/);
+  assert.throws(() => g.ctx.addNote('20001', 'DEV', 'x', 'x'), /no longer used/);
+  assert.deepStrictEqual(Array.from(g.ctx.getBootstrap().lists.noteKinds), ['General', 'Blocker']);
+
+  // A sheet from the earlier version: comments in the old columns, DEV/SED still in Lists.
+  g.setCell('20002', 'Comment/Note (DEV)', 'TC1-4 passed in DEV 800');
+  g.setCell('20002', 'Comment/Note (SED)', 'Waiting on SED transport');
+  g.setCell('20004', 'Comment/Note (SED)', 'SED passed');
+  const lists = g.ss.getSheetByName('Lists');
+  const kc = lists.dump()[0].indexOf('Note Kind') + 1;
+  ['General', 'DEV', 'SED', 'Blocker'].forEach((k, i) => lists.set(i + 2, kc, k));
+  delete g.props.COMMENTS_MIGRATED;
+  g.props.SCHEMA_VERSION = '3';
+
+  const boot = g.ctx.getBootstrap();
+  assert.deepStrictEqual(Array.from(boot.lists.noteKinds), ['General', 'Blocker'], 'DEV/SED hidden even if still in Lists');
+  const n2 = g.ctx.getItemDetail('20002').notes.map((n) => [n.kind, n.text]).sort();
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(n2)), [['DEV', 'TC1-4 passed in DEV 800'], ['SED', 'Waiting on SED transport']]);
+  assert.strictEqual(g.ctx.getItemDetail('20004').notes.length, 1);
+  assert.strictEqual(boot.noteCounts['20002'], 2);
+  assert.strictEqual(g.props.COMMENTS_MIGRATED, '3');
+
+  g.props.SCHEMA_VERSION = '3';
+  g.ctx.getBootstrap();
+  assert.strictEqual(g.ctx.getItemDetail('20002').notes.length, 2, 'not copied twice');
 });

@@ -2,13 +2,13 @@
 
 Web app for the Carrier Compliance QA team to track AXO items, built the same way as the NPD QA Endorsement Tracker: a Google Apps Script web app that saves to a Google Sheet.
 
-- **Import** the AXO items CSV export. New AXOs are added, existing ones get their AXO fields refreshed. QA fields (status, handler, system, comments, notes) are never overwritten.
+- **Import** the AXO items CSV export. New AXOs are added, existing ones get their AXO fields refreshed. QA fields (status, handler, system, notes) are never overwritten.
 - **Item Type** is mapped on import: `defects` → **Bug**, `features` → **User Story**.
-- **Track** each item with the columns from the AXO Monitoring 2026 workbook: High Priority, AXO Category, System, Handler, Status, Date of Completion, Comment/Note (DEV), Comment/Note (SED). Status colours match the workbook, except Done, which is slate so it can't be confused with Ongoing BA/DEV.
+- **Track** each item with the columns from the AXO Monitoring 2026 workbook: High Priority, AXO Category, System, Handler, Status, Date of Completion. Status colours match the workbook, except Done, which is slate so it can't be confused with Ongoing BA/DEV.
 - **Quarters**: every AXO is tagged with a quarter (Q1–Q4 plus year). Tabs at the top scope the counts, chart and table to one quarter.
 - **Dev and BA** are shown under every item name. BA is the AXO export's "Reported By" column.
 - **Review points**: setting an item to Review Points opens a box for the reviewing QA to write the points. They're saved on the item and sent to the handler as a Slack DM.
-- **Notes**: every item has a timestamped, signed notes thread (General, DEV, SED, Blocker) plus a change history.
+- **Notes**: every item has a timestamped, signed notes thread (General or Blocker) plus a change history. The old Comment/Note (DEV) and (SED) boxes were replaced by notes.
 - **Days in Status**: each AXO shows how many working days (Tuesday to Saturday) it has been in its current status. After 2 working days the handler gets a Slack DM from the bot.
 - **QA workload**: AXOs per handler for the selected quarter, split into in progress, not started, completed and discarded, plus reviews given.
 - **Reports**: a quarter or date-range report (summary, status breakdown, workload, activity, items needing attention) that downloads as a PDF.
@@ -20,7 +20,7 @@ Web app for the Carrier Compliance QA team to track AXO items, built the same wa
 
 | From the AXO CSV (refreshed on import) | QA tracking (owned by the team) |
 | --- | --- |
-| ID, Item Type, Name, Workflow Step, Priority, Developer, BA (from Reported By), Release Notes Description | Quarter, High Priority, AXO Category, System, Handler, Status, Date of Completion, Comment/Note (DEV), Comment/Note (SED) |
+| ID, Item Type, Name, Workflow Step, Priority, Developer, BA (from Reported By), Release Notes Description | Quarter, High Priority, AXO Category, System, Handler, Status, Date of Completion |
 
 The CSV has two `Developer` columns (the first is filled for defects, the second for features); they are merged into one. AXO Category is set from the name prefix on first import (`ERPIS…` → ERPIS, `SERPC…`/`SERPCAR…` → SERPCAR) and can be changed. High Priority starts ticked when the AXO priority is High.
 
@@ -62,6 +62,10 @@ Set these under **Project Settings → Script properties**. All are optional exc
 
 After changing code: **Deploy → Manage deployments → Edit (pencil) → Version: New version → Deploy**. This keeps the same URL. Creating a *new* deployment gives a new URL, which breaks everyone's bookmark.
 
+### Comment/Note (DEV) and (SED) columns
+
+These two columns are retired: the team writes notes instead. They stay in the Items tab (greyed out) so the column layout doesn't shift. On the first load after the update, any text already in them is copied into that AXO's notes as a DEV or SED note, once. The cells are left as they were, as a record.
+
 ### Upgrading from an earlier version
 
 1. Paste the new contents of `Code.gs`, `Mapping.gs`, `Slack.gs`, `Index`, `Styles` and `Script`, and add the new script file `Report.gs`. `appsscript.json` has not changed.
@@ -73,7 +77,7 @@ After changing code: **Deploy → Manage deployments → Edit (pencil) → Versi
 
 ### Days in Status and nudges
 
-Days in Status counts working days, Tuesday to Saturday, since the AXO's Status last changed; the day of the change is not counted, and other edits (handler, comments) don't restart it. Done, Moved and Withdraw show a dash. The working days are the `WORK_DAYS` list at the top of `Mapping.gs`.
+Days in Status counts working days, Tuesday to Saturday, since the AXO's Status last changed; the day of the change is not counted, and other edits (handler, notes) don't restart it. Done, Moved and Withdraw show a dash. The working days are the `WORK_DAYS` list at the top of `Mapping.gs`.
 
 On each working day at 5 AM Manila time (`NUDGE_HOUR`), `sendNudges` looks for AXOs that have been in Ongoing QA, Ongoing BA/DEV, Awaiting BA/DEV, For Review, Review Points or For Upload for 2 or more working days. Each handler gets one DM from the bot listing all of their stuck AXOs. An AXO is nudged again only after another 2 working days in the same status. Handlers without a Slack ID, and AXOs with no handler, are listed in one post in the team channel instead. Change the statuses in `NUDGE_STATUSES` and the threshold in `NUDGE_AFTER_DAYS` (`Mapping.gs`).
 

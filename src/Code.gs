@@ -11,7 +11,7 @@
 
 var SHEETS = { items: 'Items', notes: 'Notes', activity: 'Activity', lists: 'Lists', deleted: 'Deleted' };
 /** Bump when setup() must run again on an existing sheet (new columns or tabs). */
-var SCHEMA_VERSION = '3';
+var SCHEMA_VERSION = '4';
 var LIST_EXTRA_COLUMNS = ['Handler Slack ID', 'Email To', 'Email CC'];
 var TZ = Session.getScriptTimeZone() || 'Asia/Manila';
 
@@ -83,6 +83,7 @@ function setup() {
   });
   formatItems_(items);
   backfillStatusSince_(items);
+  migrateComments_();
   PropertiesService.getScriptProperties().setProperty('SCHEMA_VERSION', SCHEMA_VERSION);
   console.log('Setup complete');
   return 'Setup complete';
@@ -95,6 +96,33 @@ function ensureSchema_() {
   withLock_(function () {
     if (props.getProperty('SCHEMA_VERSION') !== SCHEMA_VERSION) setup();
   });
+}
+
+/**
+ * The Comment/Note (DEV) and (SED) boxes were retired in favour of notes. Copies any
+ * text in them into the AXO's notes, once, dated when the AXO was last updated. The
+ * cells are left as they were.
+ */
+function migrateComments_() {
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('COMMENTS_MIGRATED')) return;
+  var col = colIndex_();
+  var rows = [];
+  readItems_().rows.forEach(function (r) {
+    var when = r.values[col.updatedAt] || r.values[col.lastImported] || new Date();
+    var by = String(r.values[col.updatedBy] || '').trim() || 'Comment column';
+    [['commentDev', 'DEV'], ['commentSed', 'SED']].forEach(function (c) {
+      var text = String(r.values[col[c[0]]] || '').trim();
+      if (text) rows.push([Utilities.getUuid(), String(r.values[0]), c[1], text, by, when]);
+    });
+  });
+  if (rows.length) {
+    var nsh = sheet_(SHEETS.notes);
+    var at = Math.max(nsh.getLastRow(), 1) + 1;
+    ensureRows_(nsh, at + rows.length - 1);
+    nsh.getRange(at, 1, rows.length, NOTE_COLUMNS.length).setValues(rows);
+  }
+  props.setProperty('COMMENTS_MIGRATED', String(rows.length));
 }
 
 function deletedColumns_() {
@@ -157,8 +185,8 @@ function formatItems_(sh) {
 
   sh.getRange(1, 1, 1, width).setBackground('#0F6EC8').setFontColor('#FFFFFF').setFontWeight('bold');
   sh.getRange(1, col.highPriority + 1).setBackground('#FF0000');
-  sh.getRange(1, col.commentDev + 1).setBackground('#00B0F0');
-  sh.getRange(1, col.commentSed + 1).setBackground('#FFFF00').setFontColor('#000000');
+  // Retired comment columns: greyed out, kept as a record of what was there.
+  sh.getRange(1, col.commentDev + 1, 1, 2).setBackground('#9AA3B0').setFontColor('#FFFFFF');
   sh.setFrozenRows(1);
   sh.setFrozenColumns(1);
 
@@ -387,7 +415,7 @@ function getBootstrap() {
       categories: lists['AXO Category'] || DEFAULT_LISTS['AXO Category'],
       systems: lists['System'] || DEFAULT_LISTS['System'],
       handlers: lists['Handler'] || DEFAULT_LISTS['Handler'],
-      noteKinds: lists['Note Kind'] || DEFAULT_LISTS['Note Kind'],
+      noteKinds: (lists['Note Kind'] || DEFAULT_LISTS['Note Kind']).filter(function (k) { return RETIRED_NOTE_KINDS.indexOf(k) < 0; }),
       slackHandlers: Object.keys(lists.slackIds || {})
     },
     currentQuarter: currentQuarter_(),
@@ -728,6 +756,7 @@ function noteToObj_(r) {
 function addNote(id, kind, text, actorName) {
   requireActor_(actorName);
   if (kind === REVIEW_KIND) throw new Error('Use the review points form to send review points.');
+  if (RETIRED_NOTE_KINDS.indexOf(kind) >= 0) throw new Error('"' + kind + '" notes are no longer used. Pick General or Blocker.');
   return withLock_(function () {
     var hit = findRow_(id);
     if (!hit) throw new Error('AXO ' + id + ' is no longer in the tracker.');

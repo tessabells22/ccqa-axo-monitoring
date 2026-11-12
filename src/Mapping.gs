@@ -22,8 +22,10 @@ var ITEM_COLUMNS = [
   { key: 'handler',       header: 'Handler',            editable: true },
   { key: 'status',        header: 'Status',             editable: true },
   { key: 'completedOn',   header: 'Date of Completion', editable: true },
-  { key: 'commentDev',    header: 'Comment/Note (DEV)', editable: true },
-  { key: 'commentSed',    header: 'Comment/Note (SED)', editable: true },
+  // Retired: the team uses notes instead. The columns stay so the sheet layout doesn't
+  // shift; setup() copies any text in them into the AXO's notes once.
+  { key: 'commentDev',    header: 'Comment/Note (DEV)' },
+  { key: 'commentSed',    header: 'Comment/Note (SED)' },
   // Bookkeeping
   { key: 'updatedBy',     header: 'Updated By' },
   { key: 'updatedAt',     header: 'Updated At' },
@@ -66,8 +68,11 @@ var DEFAULT_LISTS = {
   'Handler': ['Abbey - QA', 'AJ - QA', 'Anika - QA', 'Carla - QA', 'Cess - QA', 'Dan - QA', 'Jhopet - QA',
               'Joanne - QA', 'Julius - QA', 'Kat - QA', 'Ley - QA', 'Liza - QA', 'Loraleen - QA', 'Ron - QA',
               'Sha - QA', 'Tessa - QA', 'Von - QA'],
-  'Note Kind': ['General', 'DEV', 'SED', 'Blocker']
+  'Note Kind': ['General', 'Blocker']
 };
+
+/** Note types no longer offered. Old notes of these types still show. */
+var RETIRED_NOTE_KINDS = ['DEV', 'SED'];
 
 var ITEM_TYPE_MAP = { defects: 'Bug', defect: 'Bug', features: 'User Story', feature: 'User Story' };
 
