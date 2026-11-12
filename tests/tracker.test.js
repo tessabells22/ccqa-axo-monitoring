@@ -292,8 +292,8 @@ test('nudges: one bot DM per handler, no repeat until two more working days', ()
   assert.match(g.slackDms[0].blocks[0].text.text, /2 AXOs of yours/);
   assert.match(g.slackDms[0].blocks[0].text.text, /AXO 20001[\s\S]*Ongoing QA\* for 2 working days/);
   assert.doesNotMatch(g.slackDms[0].blocks[0].text.text, /20004/, 'Done is never nudged');
-  assert.strictEqual(g.slackPosts.length, posts + 1, 'Carla has no Slack ID, so the channel gets it');
-  assert.match(g.slackPosts[posts].blocks[0].text.text, /Carla - QA[\s\S]*20003/);
+  assert.strictEqual(g.slackPosts.length, posts + 1, 'For Review with no reviewer goes to the channel');
+  assert.match(g.slackPosts[posts].blocks[0].text.text, /For Review, no reviewer yet[\s\S]*20003/);
   assert.strictEqual(g.ctx.getBootstrap().items.find((i) => i.id === '20001').lastNudged, '2026-11-12');
 
   g.setNow('2026-11-13T05:10:00+08:00');
@@ -445,7 +445,7 @@ test('an existing sheet is upgraded on first load without losing data', () => {
 
   g.setNow('2026-11-06T09:00:00+08:00');
   const boot = g.ctx.getBootstrap();
-  assert.strictEqual(g.props.SCHEMA_VERSION, '5');
+  assert.strictEqual(g.props.SCHEMA_VERSION, '6');
   assert.ok(g.ss.getSheetByName('Deleted'), 'Deleted tab created');
   const newLists = lists.dump()[0];
   assert.ok(newLists.includes('Email To') && newLists.includes('Email CC'));
@@ -484,7 +484,9 @@ test('report: snapshot, workload and period activity', () => {
   assert.deepStrictEqual([ley.total, ley['In Progress'], ley.pointsReceived, ley.reviewsGiven], [2, 2, 1, 0]);
   assert.deepStrictEqual([carla.total, carla['Completed'], carla['Discarded'], carla.completedInPeriod, carla.reviewsGiven], [2, 1, 1, 1, 1]);
   assert.strictEqual(d.workload[d.workload.length - 1].name, 'Unassigned');
-  assert.deepStrictEqual({ ...d.activity }, { completed: 1, statusChanges: 5, reviewPoints: 1, blockers: 1 });
+  assert.deepStrictEqual({ ...d.activity }, { completed: 1, statusChanges: 5, reviewPoints: 1, blockers: 1, backToDev: 0 });
+  assert.deepStrictEqual(Array.from(d.reworked, (x) => [x.item.id, x.rounds, x.back]), [['20002', 1, 0]]);
+  assert.match(g.ctx.buildReport({ quarter: 'Q4 2026' }).html, /Most reworked AXOs/);
   assert.deepStrictEqual(Array.from(d.stuck, (i) => i.id).sort(), ['20001', '20002'], 'in one status for 2+ working days');
   assert.deepStrictEqual(Array.from(d.hpOpen, (i) => i.id), ['20001']);
   const rp = d.statusRows.find((r) => r.name === 'Review Points');
@@ -591,5 +593,95 @@ test('release: per AXO, stored without the category prefix, settable in bulk', (
   assert.throws(() => g.ctx.updateItems(['20001'], { release: '1' }, ''), /Pick your name/);
   assert.ok(g.ss.getSheetByName('Activity').dump().some((r) => r[2] === '20001' && r[3] === 'Release' && r[5] === '3.8'));
   assert.strictEqual(g.ctx.addItem({ id: '30001', name: 'ERPIS x', release: 'ERPIS 5.5' }, 'x').release, '5.5');
-  assert.strictEqual(g.ss.getSheetByName('Items').dump()[0].slice(-1)[0], 'Release', 'new column goes at the end');
+  assert.deepStrictEqual(g.ss.getSheetByName('Items').dump()[0].slice(-2), ['Release', 'Reviewer'], 'new columns go at the end');
+});
+
+// ---------------------------------------------------------------- reviewer, bulk status, rework
+
+test('reviewer: claimed by another QA, never the handler; handler is told', () => {
+  const g = fresh({ props: { SLACK_BOT_TOKEN: 'xoxb-1', SLACK_WEBHOOK_URL: 'https://hooks/x' } });
+  g.ctx.importCsv(CSV, 'x');
+  setSlackId(g.ss, 'Ley - QA', 'U0LEY');
+  g.ctx.updateItem('20001', { handler: 'Ley - QA', status: 'For Review' }, 'Ley - QA');
+  assert.throws(() => g.ctx.updateItem('20001', { reviewer: 'Ley - QA' }, 'Ley - QA'), /someone else has to review it/);
+  const dms = g.slackDms.length;
+  const it = g.ctx.updateItem('20001', { reviewer: 'Carla - QA' }, 'Carla - QA');
+  assert.strictEqual(it.reviewer, 'Carla - QA');
+  assert.strictEqual(g.slackDms.length, dms + 1);
+  assert.strictEqual(g.slackDms[dms].channel, 'U0LEY');
+  assert.match(g.slackDms[dms].blocks[0].text.text, /Carla - QA\* is reviewing/);
+  assert.throws(() => g.ctx.updateItem('20001', { handler: 'Carla - QA' }, 'x'), /someone else has to review it/, 'nor reassigned to the reviewer');
+  assert.strictEqual(g.ctx.updateItem('20001', { reviewer: '' }, 'Carla - QA').reviewer, '', 'can give it back');
+});
+
+test('review points make the sender the reviewer, with only the points DM', () => {
+  const g = fresh({ props: { SLACK_BOT_TOKEN: 'xoxb-1' } });
+  g.ctx.importCsv(CSV, 'x');
+  setSlackId(g.ss, 'Ley - QA', 'U0LEY');
+  g.ctx.updateItem('20002', { handler: 'Ley - QA', status: 'For Review' }, 'x');
+  g.ctx.setReviewPoints('20002', 'fix TC3', 'Carla - QA');
+  assert.strictEqual(g.ctx.getBootstrap().items.find((i) => i.id === '20002').reviewer, 'Carla - QA');
+  assert.strictEqual(g.slackDms.length, 1);
+  assert.match(g.slackDms[0].blocks[0].text.text, /Review points/);
+  // an existing reviewer is kept when someone else adds points
+  g.ctx.setReviewPoints('20002', 'one more', 'AJ - QA');
+  assert.strictEqual(g.ctx.getBootstrap().items.find((i) => i.id === '20002').reviewer, 'Carla - QA');
+});
+
+test('nudges for For Review go to the reviewer', () => {
+  const g = fresh({ props: { SLACK_BOT_TOKEN: 'xoxb-1', SLACK_WEBHOOK_URL: 'https://hooks/x' } });
+  g.setNow('2026-11-10T09:00:00+08:00');
+  g.ctx.importCsv(CSV, 'x');
+  setSlackId(g.ss, 'Ley - QA', 'U0LEY');
+  setSlackId(g.ss, 'Carla - QA', 'U0CARLA');
+  g.ctx.updateItem('20001', { handler: 'Ley - QA', status: 'For Review', reviewer: 'Carla - QA' }, 'x');
+  g.ctx.updateItem('20002', { handler: 'Ley - QA', status: 'Ongoing QA' }, 'x');
+  const before = g.slackDms.length;
+  g.setNow('2026-11-12T05:10:00+08:00');
+  const r = g.ctx.sendNudges();
+  assert.deepStrictEqual([r.due, r.dms], [2, 2]);
+  const sent = g.slackDms.slice(before);
+  const carla = sent.find((d) => d.channel === 'U0CARLA'), ley = sent.find((d) => d.channel === 'U0LEY');
+  assert.match(carla.blocks[0].text.text, /20001[\s\S]*you are the reviewer/);
+  assert.match(ley.blocks[0].text.text, /20002/);
+  assert.doesNotMatch(ley.blocks[0].text.text, /20001/, 'the handler is not nudged while it waits on the reviewer');
+});
+
+test('bulk status: one Slack summary, Review Points refused', () => {
+  const g = fresh({ props: { SLACK_WEBHOOK_URL: 'https://hooks/x' } });
+  g.ctx.importCsv(CSV, 'x');
+  const posts = g.slackPosts.length;
+  assert.throws(() => g.ctx.updateItems(['20001'], { status: 'Review Points' }, 'x'), /one AXO at a time/);
+  g.ctx.updateItem('20003', { status: 'Done' }, 'x');
+  const after1 = g.slackPosts.length;
+  const res = g.ctx.updateItems(['20001', '20002', '20003'], { status: 'Done' }, 'Tessa - QA');
+  assert.deepStrictEqual(Array.from(res, (i) => i.status), ['Done', 'Done', 'Done']);
+  assert.ok(res.every((i) => /^\d{4}-\d{2}-\d{2}$/.test(i.completedOn)), 'completion date stamped');
+  assert.strictEqual(g.slackPosts.length, after1 + 1, 'one summary post');
+  assert.match(g.slackPosts[after1].blocks[0].text.text, /^\*2 AXOs → Done\*/, 'only the ones that changed');
+  assert.strictEqual(after1, posts + 1);
+  g.ctx.updateItems(['20004'], { status: 'Ongoing QA' }, 'x');
+  assert.strictEqual(g.slackPosts.length, after1 + 1, 'no post for statuses outside the notify list');
+});
+
+test('rework: review rounds and trips back to BA/DEV', () => {
+  assert.deepStrictEqual(M.reworkCounts([
+    [0, 'a', '1', 'Status', 'Ongoing QA', 'Ongoing BA/DEV'],
+    [0, 'a', '1', 'Status', 'Not started', 'Ongoing BA/DEV'],
+    [0, 'a', '1', 'Status', 'Awaiting BA/DEV', 'Ongoing BA/DEV'],
+    [0, 'a', '1', 'Status', 'For Review', 'Ongoing BA/DEV'],
+    [0, 'a', '2', 'Workflow Step', '6. Add test cases', '4.A Rework'],
+    [0, 'a', '2', 'Workflow Step', '4.A Rework', '4.A Rework again']
+  ], [['n', '1', 'Review Points'], ['n', '1', 'Review Points'], ['n', '2', 'General']]),
+  { 1: { rounds: 2, back: 2 }, 2: { rounds: 0, back: 1 } });
+
+  const g = fresh();
+  g.ctx.importCsv(CSV, 'x');
+  g.ctx.updateItem('20001', { handler: 'Ley - QA', status: 'Ongoing QA' }, 'x');
+  g.ctx.updateItem('20001', { status: 'Ongoing BA/DEV' }, 'x');
+  g.ctx.updateItem('20001', { status: 'For Review' }, 'x');
+  g.ctx.setReviewPoints('20001', 'fix', 'Carla - QA');
+  const rw = g.ctx.getBootstrap().rework;
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(rw['20001'])), { rounds: 1, back: 1 });
+  assert.strictEqual(rw['20002'], undefined);
 });

@@ -49,7 +49,7 @@ function reportData_(opts) {
   var catRow = function (k) { return cats[k] = cats[k] || { name: k, total: 0, 'Not Started': 0, 'In Progress': 0, 'Completed': 0, 'Discarded': 0 }; };
   var workRow = function (k) {
     return work[k] = work[k] || { name: k, total: 0, 'Not Started': 0, 'In Progress': 0, 'Completed': 0, 'Discarded': 0,
-      completedInPeriod: 0, pointsReceived: 0, reviewsGiven: 0 };
+      completedInPeriod: 0, pointsReceived: 0, reviewsGiven: 0, backToDev: 0 };
   };
   var hpOpen = [], stuck = [], unassignedOpen = 0, completedList = [];
 
@@ -86,13 +86,22 @@ function reportData_(opts) {
       }
     });
   }
-  var statusChanges = 0;
-  var ash = sheet_(SHEETS.activity);
-  if (ash.getLastRow() > 1) {
-    ash.getRange(2, 1, ash.getLastRow() - 1, ACTIVITY_COLUMNS.length).getValues().forEach(function (r) {
-      if (String(r[3]) === 'Status' && byId[String(r[2])] && inPeriod(fmtDate_(r[0], 'yyyy-MM-dd').slice(0, 10))) statusChanges++;
-    });
-  }
+  var statusChanges = 0, backToDev = 0;
+  var activityRows = readAll_(SHEETS.activity, ACTIVITY_COLUMNS.length);
+  activityRows.forEach(function (r) {
+    var item = byId[String(r[2])];
+    if (!item || !inPeriod(fmtDate_(r[0], 'yyyy-MM-dd').slice(0, 10))) return;
+    if (String(r[3]) === 'Status') statusChanges++;
+    // Same rule as the tracker's rework count, for this one row.
+    var one = reworkCounts([r], [])[item.id];
+    if (one && one.back) { backToDev++; workRow(item.handler || 'Unassigned').backToDev++; }
+  });
+  // Rework over each AXO's whole life (not just the period), for the most-reworked list.
+  var rework = reworkCounts(activityRows, readAll_(SHEETS.notes, NOTE_COLUMNS.length));
+  var reworked = items.map(function (i) {
+    var rw = rework[i.id] || { rounds: 0, back: 0 };
+    return { item: i, rounds: rw.rounds, back: rw.back, total: rw.rounds + rw.back };
+  }).filter(function (x) { return x.total; }).sort(function (a, b) { return b.total - a.total || b.rounds - a.rounds; });
 
   var live = items.length - groups['Discarded'];
   var byTotal = function (a, b) { return b.total - a.total || (a.name < b.name ? -1 : 1); };
@@ -110,7 +119,8 @@ function reportData_(opts) {
     statusRows: statusRows.filter(function (r) { return r.total; }),
     categories: Object.keys(cats).map(function (k) { return cats[k]; }).sort(byTotal),
     workload: workload,
-    activity: { completed: completedList.length, statusChanges: statusChanges, reviewPoints: reviewPoints, blockers: blockers.length },
+    activity: { completed: completedList.length, statusChanges: statusChanges, reviewPoints: reviewPoints, blockers: blockers.length, backToDev: backToDev },
+    reworked: reworked,
     completedList: completedList.sort(function (a, b) { return a.completedOn < b.completedOn ? -1 : a.completedOn > b.completedOn ? 1 : 0; }),
     stuck: stuck.sort(function (a, b) { return b.daysInStatus - a.daysInStatus; }),
     hpOpen: hpOpen,
@@ -231,12 +241,12 @@ function reportHtml_(d) {
   }), { align: ['left', 'right', 'right', 'right', 'right', 'right'] });
 
   // 4. Workload
-  out += rHeading_('QA workload', 'AXOs per handler today. The last three columns count the report period only.');
-  out += rTable_(['Handler', 'Total', 'Not started', 'In progress', 'Completed', 'Discarded', 'Completed in period', 'Review points received', 'Reviews given'],
+  out += rHeading_('QA workload', 'AXOs per handler today. The last four columns count the report period only.');
+  out += rTable_(['Handler', 'Total', 'Not started', 'In progress', 'Completed', 'Discarded', 'Completed in period', 'Review points received', 'Back to BA/DEV', 'Reviews given'],
     d.workload.map(function (w) {
       return [{ text: w.name, style: w.name === 'Unassigned' ? 'color:' + R_.muted + ';' : 'font-weight:bold;' }, { text: w.total, style: 'font-weight:bold;' },
-        w['Not Started'], w['In Progress'], w['Completed'], w['Discarded'], w.completedInPeriod, w.pointsReceived, w.reviewsGiven];
-    }), { align: ['left', 'right', 'right', 'right', 'right', 'right', 'right', 'right', 'right'], empty: 'No AXOs in scope.' });
+        w['Not Started'], w['In Progress'], w['Completed'], w['Discarded'], w.completedInPeriod, w.pointsReceived, w.backToDev, w.reviewsGiven];
+    }), { align: ['left', 'right', 'right', 'right', 'right', 'right', 'right', 'right', 'right', 'right'], empty: 'No AXOs in scope.' });
 
   // 5. Activity
   out += rHeading_('Activity, ' + period);
@@ -271,6 +281,12 @@ function reportHtml_(d) {
   if (d.unassignedOpen) {
     out += '<p style="' + R_.font + 'font-size:11px;color:' + R_.muted + ';margin:10px 0 0 0">' + d.unassignedOpen + ' open AXO' + (d.unassignedOpen === 1 ? ' has' : 's have') + ' no handler.</p>';
   }
+
+  // Rework
+  out += rHeading_('Most reworked AXOs', 'Review-point rounds, and times an AXO went back to development (status from a QA stage to Ongoing BA/DEV, or its AXO workflow step to Rework). Counted over the AXO\'s whole time in the tracker.');
+  out += rTable_(['AXO', 'Name', 'Handler', 'Status', 'Review rounds', 'Back to BA/DEV'], d.reworked.slice(0, 10).map(function (x) {
+    return [x.item.id, x.item.name, x.item.handler || '—', rStatus_(x.item.status), { text: x.rounds, style: 'font-weight:bold;' }, { text: x.back, style: 'font-weight:bold;' }];
+  }), { align: ['left', 'left', 'left', 'left', 'right', 'right'], widths: ['8%', '44%', '14%', '14%', '10%', '10%'], empty: 'No rework recorded for these AXOs.' });
 
   // 7. Full list
   if (o.includeList) {

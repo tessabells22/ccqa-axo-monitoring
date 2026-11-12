@@ -9,6 +9,7 @@
   };
   var $ = function (id) { return document.getElementById(id); };
   var GROUPS = ['Not Started', 'In Progress', 'Completed', 'Discarded'];
+  var QA_STAGES = ['Ongoing QA', 'For Review', 'Review Points', 'For Upload', 'Done'];
 
   // ------------------------------------------------------------ server calls
   function call(fn) {
@@ -115,6 +116,7 @@
       S.currentQuarter = data.currentQuarter;
       S.slackTokenIssue = data.slackTokenIssue || '';
       S.reviews = data.reviews || [];
+      S.rework = data.rework || {};
       S.today = data.today;
       S.nudgeStatuses = data.nudgeStatuses || [];
       S.nudgeAfter = data.nudgeAfterDays || 2;
@@ -157,6 +159,8 @@
     var hd = '<option value="">Anyone</option><option value="__me">Me</option><option value="__none">Unassigned</option>';
     S.lists.handlers.forEach(function (h) { hd += '<option>' + esc(h) + '</option>'; });
     $('f-handler').innerHTML = hd;
+    $('f-reviewer').innerHTML = '<option value="">Anyone</option><option value="__me">Me</option><option value="__none">No reviewer yet</option>' +
+      S.lists.handlers.map(function (h) { return '<option>' + esc(h) + '</option>'; }).join('');
     $('note-kind').innerHTML = options(S.lists.noteKinds.filter(function (k) { return k !== 'Review Points'; }), 'General');
     restoreQuarter();
     restoreFilters();
@@ -209,11 +213,11 @@
   }
 
   // ------------------------------------------------------------ filters
-  var FILTER_IDS = ['f-q', 'f-cat', 'f-type', 'f-status', 'f-handler', 'f-prio', 'f-hp', 'f-stuck', 'f-gone'];
+  var FILTER_IDS = ['f-q', 'f-cat', 'f-type', 'f-status', 'f-handler', 'f-reviewer', 'f-prio', 'f-hp', 'f-stuck', 'f-gone'];
   function readFilters() {
     return {
       q: $('f-q').value.trim().toLowerCase(), cat: $('f-cat').value, type: $('f-type').value,
-      status: $('f-status').value, handler: $('f-handler').value, prio: $('f-prio').value,
+      status: $('f-status').value, handler: $('f-handler').value, reviewer: $('f-reviewer').value, prio: $('f-prio').value,
       hp: $('f-hp').checked, gone: $('f-gone').checked, stuck: $('f-stuck').checked
     };
   }
@@ -230,6 +234,7 @@
     if (!f) return;
     $('f-q').value = f.q || ''; $('f-cat').value = f.cat || ''; $('f-type').value = f.type || '';
     $('f-status').value = f.status || ''; $('f-handler').value = f.handler || ''; $('f-prio').value = f.prio || '';
+    $('f-reviewer').value = f.reviewer || '';
     $('f-hp').checked = !!f.hp; $('f-gone').checked = !!f.gone; $('f-stuck').checked = !!f.stuck;
   }
   function matches(i, f) {
@@ -249,6 +254,9 @@
       if (f.status.indexOf('g:') === 0 && g !== f.status.slice(2)) return false;
       if (f.status.indexOf('s:') === 0 && i.status !== f.status.slice(2)) return false;
     }
+    if (f.reviewer === '__me') { if (!me() || i.reviewer !== me()) return false; }
+    else if (f.reviewer === '__none') { if (i.status !== 'For Review' || i.reviewer) return false; }
+    else if (f.reviewer && i.reviewer !== f.reviewer) return false;
     if (f.handler === '__me') { if (!me() || i.handler !== me()) return false; }
     else if (f.handler === '__none') { if (i.handler) return false; }
     else if (f.handler && i.handler !== f.handler) return false;
@@ -265,7 +273,7 @@
 
   function renderKpis() {
     var scope = scoped();
-    var c = { total: scope.length, 'Not Started': 0, 'In Progress': 0, Completed: 0, Discarded: 0, hp: 0, unassigned: 0, stuck: 0 };
+    var c = { total: scope.length, 'Not Started': 0, 'In Progress': 0, Completed: 0, Discarded: 0, hp: 0, unassigned: 0, stuck: 0, unclaimed: 0 };
     scope.forEach(function (i) {
       var g = group(i.status);
       c[g]++;
@@ -273,16 +281,18 @@
       if (open && i.highPriority) c.hp++;
       if (open && !i.handler) c.unassigned++;
       if (isStuck(i)) c.stuck++;
+      if (i.status === 'For Review' && !i.reviewer) c.unclaimed++;
     });
     var f = readFilters();
     var tiles = [
-      { label: 'Total', val: c.total, sub: selectedQuarter() || 'all quarters', tone: 'brand', key: 'all', on: !f.status && !f.hp && !f.handler && !f.stuck },
+      { label: 'Total', val: c.total, sub: selectedQuarter() || 'all quarters', tone: 'brand', key: 'all', on: !f.status && !f.hp && !f.handler && !f.stuck && !f.reviewer },
       { label: 'Not started', val: c['Not Started'], sub: 'no status yet', tone: 'neu', key: 'g:Not Started', on: f.status === 'g:Not Started' },
       { label: 'In progress', val: c['In Progress'], sub: 'QA, BA/DEV, review', tone: 'sky', key: 'g:In Progress', on: f.status === 'g:In Progress' },
       { label: 'Completed', val: c.Completed, sub: 'Done + For Upload', tone: 'ok', key: 'g:Completed', on: f.status === 'g:Completed' },
       { label: 'Discarded', val: c.Discarded, sub: 'Moved + Withdraw', tone: 'neu', key: 'g:Discarded', on: f.status === 'g:Discarded' },
       { label: 'High priority open', val: c.hp, sub: 'not completed', tone: 'bad', key: 'hp', on: f.hp && f.status === '__open' },
       { label: 'Unassigned open', val: c.unassigned, sub: 'no handler', tone: 'orange', key: 'unassigned', on: f.handler === '__none' && f.status === '__open' },
+      { label: 'Waiting for a reviewer', val: c.unclaimed, sub: 'For Review, nobody on it', tone: c.unclaimed ? 'orange' : 'neu', key: 'unclaimed', on: f.reviewer === '__none' },
       { label: S.nudgeAfter + '+ days in status', val: c.stuck, sub: 'working days, no change', tone: c.stuck ? 'bad' : 'neu', key: 'stuck', on: f.stuck }
     ];
     $('kpis').innerHTML = tiles.map(function (t) {
@@ -337,6 +347,26 @@
     }).join('');
   }
 
+  /** Under the status: who's reviewing, or a button for another QA to take the review. */
+  function reviewLine(i) {
+    if (i.status !== 'For Review' && i.status !== 'Review Points') return i.reviewer ? '<div class="rv-line">Reviewed by <b>' + esc(i.reviewer) + '</b></div>' : '';
+    if (i.reviewer) return '<div class="rv-line">Reviewer: <b>' + esc(i.reviewer) + '</b></div>';
+    if (i.status === 'For Review' && (!me() || i.handler !== me())) return '<button type="button" class="claim-btn" data-claim="' + esc(i.id) + '" title="Take this review; the handler is told">Review it</button>';
+    return i.status === 'For Review' ? '<div class="rv-line">No reviewer yet</div>' : '';
+  }
+  function reworkText(i) {
+    var r = S.rework[i.id];
+    if (!r || !(r.rounds || r.back)) return '';
+    var parts = [];
+    if (r.rounds) parts.push(r.rounds + ' review round' + (r.rounds === 1 ? '' : 's'));
+    if (r.back) parts.push('back to dev ' + r.back + '×');
+    return parts.join(' · ');
+  }
+  function reworkLine(i) {
+    var t = reworkText(i);
+    return t ? '<div class="rw-line" title="Review-point rounds, and times it went back to BA/DEV from a QA stage or to a Rework step in AXO">' + esc(t) + '</div>' : '';
+  }
+
   function daysCell(i) {
     if (i.daysInStatus == null) return '<span class="days" title="Finished">—</span>';
     var n = i.daysInStatus;
@@ -374,7 +404,7 @@
       '<td><input type="checkbox" class="hp-box" data-field="highPriority" aria-label="High priority"' + (i.highPriority ? ' checked' : '') + '></td>' +
       '<td><select class="cell-sel" data-field="system" aria-label="System">' + options(S.lists.systems, i.system, '—') + '</select></td>' +
       '<td><select class="cell-sel" data-field="handler" aria-label="Handler">' + options(S.lists.handlers, i.handler, 'Unassigned') + '</select></td>' +
-      '<td><select class="cell-sel status-sel' + (i.status ? '' : ' none') + '" data-field="status" aria-label="Status" style="' + statusStyle(i.status) + '">' + stOpts + '</select></td>' +
+      '<td><select class="cell-sel status-sel' + (i.status ? '' : ' none') + '" data-field="status" aria-label="Status" style="' + statusStyle(i.status) + '">' + stOpts + '</select>' + reviewLine(i) + reworkLine(i) + '</td>' +
       '<td>' + daysCell(i) + '</td>' +
       '<td><input type="date" class="cell-date" data-field="completedOn" aria-label="Date of completion" value="' + esc(i.completedOn) + '"></td>' +
       '<td><button type="button" class="notes-btn' + (n ? ' has' : '') + '" data-open="' + esc(i.id) + '" data-focus="notes">' + (n ? n + ' note' + (n > 1 ? 's' : '') : 'Add note') + '</button></td>' +
@@ -490,6 +520,10 @@
     return call('updateItem', id, patch, me()).then(function (fresh) {
       busy(-1);
       Object.assign(item, fresh);
+      if (field === 'status' && value === 'Ongoing BA/DEV' && QA_STAGES.indexOf(prev) >= 0) {
+        var rw = S.rework[id] = S.rework[id] || { rounds: 0, back: 0 };
+        rw.back++;
+      }
       replaceRow(id, true);
       renderKpis(); renderBreakdown(); renderWorkload();
       if (S.openId === id) fillDrawerFields(item, field);
@@ -527,6 +561,7 @@
     $('d-people').innerHTML = peopleHtml(item).replace(/^<div class="people">|<\/div>$/g, '');
     $('d-status').innerHTML = '<option value="">Not started</option>' + options(S.statuses.map(function (s) { return s.name; }), item.status);
     $('d-handler').innerHTML = options(S.lists.handlers, item.handler, 'Unassigned');
+    $('d-reviewer').innerHTML = options(S.lists.handlers, item.reviewer, '—');
     $('d-system').innerHTML = options(S.lists.systems, item.system, '—');
     $('d-cat').innerHTML = options(S.lists.categories, item.axoCategory, '—');
     $('d-quarter').innerHTML = (item.quarter ? '' : '<option value="">—</option>') + quarterOptions(item.quarter);
@@ -549,7 +584,7 @@
   }
 
   function fillDrawerFields(item, skipField) {
-    ['d-status', 'd-handler', 'd-system', 'd-cat', 'd-quarter', 'd-release', 'd-done', 'd-hp'].forEach(function (id) {
+    ['d-status', 'd-handler', 'd-reviewer', 'd-system', 'd-cat', 'd-quarter', 'd-release', 'd-done', 'd-hp'].forEach(function (id) {
       var el = $(id), f = el.dataset.field;
       if (f === skipField && document.activeElement === el) return;
       if (document.activeElement === el && el.tagName === 'TEXTAREA') return;
@@ -567,7 +602,8 @@
     dl.className = 'dis-line' + (isStuck(item) ? ' warn' : '');
     dl.innerHTML = item.daysInStatus == null ? '' : '<b>' + item.daysInStatus + ' working day' + (item.daysInStatus === 1 ? '' : 's') + '</b> in ' +
       esc(item.status || 'Not started') + (item.statusSince ? ', since ' + esc(fmtWhen(item.statusSince)) : '') +
-      (isStuck(item) ? '. The handler gets a Slack nudge.' : '');
+      (isStuck(item) ? '. ' + (item.status === 'For Review' ? (item.reviewer ? 'The reviewer' : 'The team channel') : 'The handler') + ' gets a Slack nudge.' : '') +
+      (reworkText(item) ? '<br>Rework: ' + esc(reworkText(item)) : '');
   }
 
   function loadDetail(id) {
@@ -662,7 +698,7 @@
     $('rp-text').value = '';
     $('rp-title').textContent = 'Review points for AXO ' + id;
     $('rp-sub').textContent = item.name;
-    $('rp-reviewer').innerHTML = options(S.lists.handlers, me(), 'Pick the reviewer');
+    $('rp-reviewer').innerHTML = options(S.lists.handlers, item.reviewer || me(), 'Pick the reviewer');
     var to = $('rp-to'), h = item.handler;
     var dmReady = S.slackDm && S.lists.slackHandlers.indexOf(h) >= 0;
     to.className = 'rp-to' + (dmReady ? '' : ' warn');
@@ -720,6 +756,45 @@
       busy(-1);
       $('del-go').disabled = false;
       showErr('del-err', e.message);
+    });
+  }
+
+  // ------------------------------------------------------------ set status on several AXOs
+  var stIds = [];
+  function openBulkStatus() {
+    stIds = S.visible.filter(function (id) { return S.selected[id]; });
+    if (!stIds.length) return;
+    $('st-title').textContent = 'Set status on ' + (stIds.length === 1 ? 'AXO ' + stIds[0] : stIds.length + ' AXOs');
+    $('st-select').innerHTML = '<option value="">Not started</option>' + S.statuses.filter(function (s) { return s.name !== 'Review Points'; })
+      .map(function (s) { return '<option>' + esc(s.name) + '</option>'; }).join('');
+    $('st-err').hidden = true;
+    $('st-go').disabled = false;
+    $('st-dlg').showModal();
+    $('st-select').focus();
+  }
+  function saveBulkStatus() {
+    var v = $('st-select').value;
+    $('st-go').disabled = true;
+    busy(1);
+    call('updateItems', stIds, { status: v }, me()).then(function (fresh) {
+      busy(-1);
+      fresh.forEach(function (f) {
+        var item = S.byId[f.id];
+        if (!item) return;
+        if (v === 'Ongoing BA/DEV' && QA_STAGES.indexOf(item.status) >= 0) {
+          var rw = S.rework[f.id] = S.rework[f.id] || { rounds: 0, back: 0 };
+          rw.back++;
+        }
+        Object.assign(item, f);
+      });
+      S.selected = {};
+      $('st-dlg').close();
+      render();
+      toast(fresh.length + ' AXO' + (fresh.length === 1 ? '' : 's') + ' set to ' + (v || 'Not started'));
+    }).catch(function (e) {
+      busy(-1);
+      $('st-go').disabled = false;
+      showErr('st-err', e.message);
     });
   }
 
@@ -1054,6 +1129,9 @@
     $('mail-release').addEventListener('input', mailRefresh);
     $('mail-web').addEventListener('click', openOwa);
     $('sel-release').addEventListener('click', function () { withMe(openRelease); });
+    $('sel-status').addEventListener('click', function () { withMe(openBulkStatus); });
+    $('st-cancel').addEventListener('click', function () { $('st-dlg').close(); });
+    $('st-form').addEventListener('submit', function (e) { e.preventDefault(); saveBulkStatus(); });
     $('rel-cancel').addEventListener('click', function () { $('rel-dlg').close(); });
     $('rel-form').addEventListener('submit', function (e) { e.preventDefault(); saveRelease(); });
     $('mail-greeting').addEventListener('input', function () { store('ccqa.greeting', $('mail-greeting').value.trim()); mailRefresh(); });
@@ -1114,6 +1192,8 @@
         Object.assign(S.byId[id], res.item);
         S.noteCounts[id] = (S.noteCounts[id] || 0) + 1;
         S.reviews.push({ id: id, by: reviewer });
+        var rw = S.rework[id] = S.rework[id] || { rounds: 0, back: 0 };
+        rw.rounds++;
         replaceRow(id, true);
         renderKpis(); renderBreakdown(); renderWorkload();
         if (S.openId === id) { fillDrawerFields(S.byId[id]); loadDetail(id); }
@@ -1175,6 +1255,7 @@
       $('f-hp').checked = k === 'hp';
       $('f-stuck').checked = k === 'stuck';
       $('f-handler').value = k === 'unassigned' ? '__none' : '';
+      $('f-reviewer').value = k === 'unclaimed' ? '__none' : '';
       $('f-status').value = k.indexOf('g:') === 0 ? k : (k === 'hp' || k === 'unassigned' ? '__open' : '');
       saveFilters(); renderTable(); renderKpis(); renderWorkload();
     });
@@ -1209,12 +1290,23 @@
       save(tr.dataset.id, el.dataset.field, fieldValue(el));
     });
     tbody.addEventListener('click', function (e) {
+      var c = e.target.closest('[data-claim]');
+      if (c) {
+        var cid = c.dataset.claim;
+        withMe(function () {
+          var it = S.byId[cid];
+          if (it && it.handler === me()) { toast('This is your own AXO, so another QA reviews it.', true); replaceRow(cid); return; }
+          var p = save(cid, 'reviewer', me());
+          if (p) p.then(function (r) { if (r) toast('You\'re reviewing AXO ' + cid + '. ' + (it.handler ? it.handler + ' has been told.' : '')); });
+        });
+        return;
+      }
       var o = e.target.closest('[data-open]');
       if (o) openDrawer(o.dataset.open, o.dataset.focus === 'notes');
     });
 
     // Drawer fields save as soon as they change.
-    ['d-status', 'd-handler', 'd-system', 'd-cat', 'd-quarter', 'd-release', 'd-done', 'd-hp'].forEach(function (id) {
+    ['d-status', 'd-handler', 'd-reviewer', 'd-system', 'd-cat', 'd-quarter', 'd-release', 'd-done', 'd-hp'].forEach(function (id) {
       $(id).addEventListener('change', function (e) { drawerSave(e.target); });
     });
     function drawerSave(el) {

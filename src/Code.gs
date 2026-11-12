@@ -11,7 +11,7 @@
 
 var SHEETS = { items: 'Items', notes: 'Notes', activity: 'Activity', lists: 'Lists', deleted: 'Deleted' };
 /** Bump when setup() must run again on an existing sheet (new columns or tabs). */
-var SCHEMA_VERSION = '5';
+var SCHEMA_VERSION = '6';
 var LIST_EXTRA_COLUMNS = ['Handler Slack ID', 'Email To', 'Email CC'];
 var TZ = Session.getScriptTimeZone() || 'Asia/Manila';
 
@@ -193,7 +193,7 @@ function formatItems_(sh) {
   var widths = { id: 70, itemType: 90, name: 520, workflowStep: 170, priority: 75, developer: 170, reportedBy: 170,
     releaseNotes: 260, quarter: 90, highPriority: 95, axoCategory: 100, system: 100, handler: 120, status: 130,
     completedOn: 120, commentDev: 420, commentSed: 300, updatedBy: 150, updatedAt: 150, lastImported: 150, inLatestImport: 110,
-    statusSince: 150, lastNudged: 110, release: 80 };
+    statusSince: 150, lastNudged: 110, release: 80, reviewer: 120 };
   Object.keys(widths).forEach(function (k) { sh.setColumnWidth(col[k] + 1, widths[k]); });
 
   var body = function (k) { return sh.getRange(2, col[k] + 1, maxRows - 1, 1); };
@@ -206,8 +206,8 @@ function formatItems_(sh) {
   };
   // Checkboxes only on rows that hold data, so empty rows stay truly empty.
   checkboxes_(sh, 2, firstFreeRow_(sh) - 2);
-  ['axoCategory', 'system', 'handler'].forEach(function (k) {
-    var header = { axoCategory: 'AXO Category', system: 'System', handler: 'Handler' }[k];
+  ['axoCategory', 'system', 'handler', 'reviewer'].forEach(function (k) {
+    var header = { axoCategory: 'AXO Category', system: 'System', handler: 'Handler', reviewer: 'Handler' }[k];
     var rule = listRule(header);
     if (rule) body(k).setDataValidation(rule);
   });
@@ -313,7 +313,7 @@ function rowToItem_(row, today) {
   item.statusSince = fmtDate_(item.statusSince, "yyyy-MM-dd'T'HH:mm:ss");
   item.lastNudged = fmtDate_(item.lastNudged, 'yyyy-MM-dd');
   ['itemType', 'name', 'workflowStep', 'priority', 'developer', 'reportedBy', 'releaseNotes', 'quarter', 'axoCategory',
-   'system', 'handler', 'status', 'commentDev', 'commentSed', 'updatedBy', 'release'].forEach(function (k) {
+   'system', 'handler', 'status', 'commentDev', 'commentSed', 'updatedBy', 'release', 'reviewer'].forEach(function (k) {
     item[k] = item[k] == null ? '' : String(item[k]);
   });
   // Working days (Tue-Sat) in the current status; null once the AXO is finished or has no start time.
@@ -386,14 +386,13 @@ function getBootstrap() {
   ensureSchema_();
   var data = readItems_();
   var counts = {}, reviews = [];
-  var notes = sheet_(SHEETS.notes);
-  if (notes.getLastRow() > 1) {
-    notes.getRange(2, 1, notes.getLastRow() - 1, NOTE_COLUMNS.length).getValues().forEach(function (r) {
-      var id = String(r[1]);
-      counts[id] = (counts[id] || 0) + 1;
-      if (String(r[2]) === REVIEW_KIND) reviews.push({ id: id, by: String(r[4]).replace(/\s*<.*>$/, '') });
-    });
-  }
+  var noteRows = readAll_(SHEETS.notes, NOTE_COLUMNS.length);
+  noteRows.forEach(function (r) {
+    var id = String(r[1]);
+    counts[id] = (counts[id] || 0) + 1;
+    if (String(r[2]) === REVIEW_KIND) reviews.push({ id: id, by: String(r[4]).replace(/\s*<.*>$/, '') });
+  });
+  var rework = reworkCounts(readAll_(SHEETS.activity, ACTIVITY_COLUMNS.length), noteRows);
   var lists = readLists_();
   var props = PropertiesService.getScriptProperties();
   var email = '';
@@ -404,6 +403,7 @@ function getBootstrap() {
     items: data.rows.map(function (r) { return rowToItem_(r.values, today); }),
     noteCounts: counts,
     reviews: reviews,
+    rework: rework,
     today: today,
     nudgeAfterDays: NUDGE_AFTER_DAYS,
     nudgeStatuses: NUDGE_STATUSES,
@@ -431,8 +431,9 @@ function getBootstrap() {
 }
 
 /** Writes only the fields in `patch`, so two people editing different fields don't clobber each other. */
-function updateItem(id, patch, actorName) {
+function updateItem(id, patch, actorName, opts) {
   requireActor_(actorName);
+  opts = opts || {};
   return withLock_(function () {
     var hit = findRow_(id);
     if (!hit) throw new Error('AXO ' + id + ' is no longer in the tracker.');
@@ -455,6 +456,13 @@ function updateItem(id, patch, actorName) {
       if (k === 'quarter' && v && !isQuarter(v)) throw new Error('Quarter must look like Q4 2026.');
       changes[k] = v;
     });
+
+    // Nobody reviews their own AXO.
+    var handlerAfter = 'handler' in changes ? changes.handler : before.handler;
+    var reviewerAfter = 'reviewer' in changes ? changes.reviewer : before.reviewer;
+    if (reviewerAfter && reviewerAfter === handlerAfter && ('reviewer' in changes || 'handler' in changes)) {
+      throw new Error(handlerAfter + ' is the handler of AXO ' + id + ', so someone else has to review it.');
+    }
 
     // Moving into Done / For Upload stamps the completion date if nobody set one.
     if (changes.status && statusGroup(changes.status) === 'Completed' && !before.completedOn && !('completedOn' in changes)) {
@@ -479,20 +487,41 @@ function updateItem(id, patch, actorName) {
       logActivity_(log);
     }
     var after = rowToItem_(hit.sheet.getRange(hit.rowNum, 1, 1, ITEM_COLUMNS.length).getValues()[0]);
-    if (log.length) {
+    if (log.length && !opts.quiet) {
       try { onItemChanged_(before, after, actorName); } catch (e) { console.warn('Slack notify failed: ' + e); }
+    }
+    if (after.reviewer && after.reviewer !== before.reviewer && !opts.noClaimDm) {
+      try { onReviewerClaimed_(after, actorName); } catch (e) { console.warn('Slack notify failed: ' + e); }
     }
     return after;
   });
 }
 
-/** The same change on several AXOs (used to set the release on many at once). */
+/**
+ * The same change on several AXOs: the release, or the status. A status change posts
+ * one Slack summary for the batch instead of one message per AXO.
+ */
 function updateItems(ids, patch, actorName) {
   requireActor_(actorName);
   ids = (ids || []).map(String).filter(Boolean);
   if (!ids.length) throw new Error('Select at least one AXO.');
   if (ids.length > 300) throw new Error('Change at most 300 AXOs at a time.');
-  return ids.map(function (id) { return updateItem(id, patch, actorName); });
+  patch = patch || {};
+  if (patch.status === REVIEW_KIND) throw new Error('Review points are sent one AXO at a time, with the points written in the review box.');
+  var was = {};
+  if ('status' in patch) readItems_().rows.forEach(function (r) { was[String(r.values[0])] = rowToItem_(r.values).status; });
+  var out = ids.map(function (id) { return updateItem(id, patch, actorName, { quiet: 'status' in patch }); });
+  if ('status' in patch) {
+    var moved = out.filter(function (i) { return was[i.id] !== i.status; });
+    try { onBulkStatus_(moved, patch.status, actorName); } catch (e) { console.warn('Slack notify failed: ' + e); }
+  }
+  return out;
+}
+
+/** Every data row of a sheet (below the header), `width` columns wide. */
+function readAll_(name, width) {
+  var sh = sheet_(name);
+  return sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, width).getValues() : [];
 }
 
 function parseDay_(s) {
@@ -798,7 +827,12 @@ function setReviewPoints(id, text, reviewerName) {
     return appendNote_(id, REVIEW_KIND, text, reviewerName);
   });
   // updateItem takes the lock itself; its channel ping skips Review Points (the DM covers it).
-  var item = updateItem(id, { status: REVIEW_KIND }, reviewerName);
+  // The QA sending the points becomes the AXO's reviewer if nobody had claimed it.
+  var current = findRow_(id) ? rowToItem_(findRow_(id).values) : {};
+  var patch = { status: REVIEW_KIND };
+  if (!current.reviewer && String(reviewerName).trim() !== current.handler) patch.reviewer = String(reviewerName).trim();
+  // The review points DM already says who reviewed, so no separate "is reviewing" DM.
+  var item = updateItem(id, patch, reviewerName, { noClaimDm: true });
   var slack;
   try { slack = sendReviewPoints_(item, note, reviewerName); } catch (e) { slack = { via: 'none', reason: String(e.message || e) }; }
   return { item: item, note: note, slack: slack };

@@ -34,8 +34,37 @@ var ITEM_COLUMNS = [
   // Added later, so they sit at the end: existing sheets keep their column order.
   { key: 'statusSince',   header: 'Status Since' },   // when the current Status was set
   { key: 'lastNudged',    header: 'Last Nudged' },    // last Slack nudge for the current Status
-  { key: 'release',       header: 'Release',            editable: true }  // e.g. 5.4; the email adds ERPIS/SERPCAR
+  { key: 'release',       header: 'Release',            editable: true },  // e.g. 5.4; the email adds ERPIS/SERPCAR
+  { key: 'reviewer',      header: 'Reviewer',           editable: true }   // the QA who claimed the review
 ];
+
+/** QA stages: an AXO moved from one of these to Ongoing BA/DEV went back to development. */
+var QA_STAGES = ['Ongoing QA', 'For Review', 'Review Points', 'For Upload', 'Done'];
+
+/**
+ * Rework per AXO from the Activity and Notes rows:
+ *   rounds  review-point rounds (Review Points notes)
+ *   back    times sent back to development: Status moved from a QA stage to Ongoing BA/DEV,
+ *           or an import moved the AXO's workflow step to a Rework step
+ * activity rows: [when, who, id, field, from, to]; note rows: [noteId, id, kind, ...]
+ */
+function reworkCounts(activityRows, noteRows) {
+  var out = {};
+  var row = function (id) { return out[id] = out[id] || { rounds: 0, back: 0 }; };
+  (noteRows || []).forEach(function (r) { if (String(r[2]) === 'Review Points') row(String(r[1])).rounds++; });
+  (activityRows || []).forEach(function (r) {
+    var field = String(r[3]), from = String(r[4]), to = String(r[5]);
+    if (field === 'Status' && to === 'Ongoing BA/DEV' && QA_STAGES.indexOf(from) >= 0) row(String(r[2])).back++;
+    else if (field === 'Workflow Step' && /rework/i.test(to) && !/rework/i.test(from)) row(String(r[2])).back++;
+  });
+  return out;
+}
+
+/** Who a stuck AXO's nudge goes to: the reviewer while it waits in For Review, else the handler. */
+function nudgeTarget(item) {
+  if (item.status === 'For Review') return item.reviewer ? { name: item.reviewer, role: 'reviewer' } : { name: '', role: 'unclaimed' };
+  return { name: item.handler || '', role: 'handler' };
+}
 
 var NOTE_COLUMNS = ['Note ID', 'AXO ID', 'Kind', 'Note', 'Author', 'Created At'];
 var ACTIVITY_COLUMNS = ['When', 'Who', 'AXO ID', 'Field', 'From', 'To'];
@@ -235,6 +264,7 @@ if (typeof module !== 'undefined') {
     mapItemType: mapItemType, deriveCategory: deriveCategory, statusGroup: statusGroup,
     quarterLabel: quarterLabel, isQuarter: isQuarter, quarterRange: quarterRange, cleanRelease: cleanRelease,
     workingDaysBetween: workingDaysBetween, nudgeDue: nudgeDue, WORK_DAYS: WORK_DAYS,
+    reworkCounts: reworkCounts, nudgeTarget: nudgeTarget,
     parseCsv: parseCsv, csvToItems: csvToItems
   };
 }

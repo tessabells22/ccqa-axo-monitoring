@@ -95,6 +95,20 @@ A later import skips AXOs that are in the Deleted tab, so a deleted AXO doesn't 
 
 Sections: summary, status breakdown by Bug and User Story, by AXO category, QA workload (including completed, review points received and reviews given in the period), activity in the period, completed in the period, needs attention (2+ working days in one status, high priority still open, blockers raised), and an optional full AXO list.
 
+### Reviewer
+
+The handler doesn't choose the reviewer: another QA takes the review. AXOs in **For Review** with nobody on them show a **Review it** button under their status (not shown to the AXO's own handler). Clicking it makes you the reviewer and the handler gets a Slack DM saying who's reviewing. The **Waiting for a reviewer** tile and the **Reviewer** filter (Me / No reviewer yet / a name) find them. The Reviewer field in the item panel can be changed or cleared, and nobody can be the reviewer of their own AXO.
+
+Sending review points on an AXO with no reviewer makes the sender its reviewer. While an AXO waits in For Review, the 2-day nudge goes to its reviewer instead of the handler; For Review AXOs with no reviewer are listed in the team channel.
+
+### Set status on several AXOs
+
+Tick AXOs, then **Set status** in the selection bar. Everything a single status change does still happens (completion date, days in status), and Slack gets one summary post for the batch instead of one per AXO. Review Points isn't offered: points are written for one AXO at a time.
+
+### Rework
+
+Under each AXO's status, and in its panel, the tracker shows its rework: the number of **review rounds** (Review Points sent) and how many times it went **back to dev**: its status moved from a QA stage (Ongoing QA, For Review, Review Points, For Upload, Done) to Ongoing BA/DEV, or an import moved its AXO workflow step to a Rework step. The counts come from the Notes and Activity tabs, so history recorded before this update counts too. The report adds a *Back to BA/DEV* column to the QA workload and a *Most reworked AXOs* list.
+
 ### Release
 
 Each AXO has a **Release** field (in its panel), holding the number only, for example `5.4`. The tracker shows it with the category in front (`ERPIS 5.4`, `SERPCAR 3.8`), taken from the AXO Category, and the email uses it. To set it on many AXOs at once, tick them and click **Set release** in the selection bar. If someone types `ERPIS 5.4`, the prefix is dropped and `5.4` is stored.

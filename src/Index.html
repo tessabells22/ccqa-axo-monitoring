@@ -72,6 +72,7 @@
         <div class="field"><label for="f-type">Item Type</label><select id="f-type"><option value="">All</option><option>Bug</option><option>User Story</option></select></div>
         <div class="field"><label for="f-status">Status</label><select id="f-status"></select></div>
         <div class="field"><label for="f-handler">Handler</label><select id="f-handler"></select></div>
+        <div class="field"><label for="f-reviewer">Reviewer</label><select id="f-reviewer"></select></div>
         <div class="field"><label for="f-prio">Priority</label><select id="f-prio"><option value="">All</option><option>High</option><option>Medium</option><option>Low</option><option value="(none)">None set</option></select></div>
         <label class="toggle"><input type="checkbox" id="f-hp">High priority</label>
         <label class="toggle"><input type="checkbox" id="f-stuck">2+ days in status</label>
@@ -83,6 +84,7 @@
         <button class="btn btn-sm btn-quiet" id="sel-all" type="button"></button>
         <span class="grow"></span>
         <button class="btn btn-sm" id="sel-clear" type="button">Clear selection</button>
+        <button class="btn btn-sm" id="sel-status" type="button">Set status</button>
         <button class="btn btn-sm" id="sel-release" type="button">Set release</button>
         <button class="btn btn-sm" id="sel-email" type="button">Email test files</button>
         <button class="btn btn-sm btn-danger" id="sel-delete" type="button">Delete selected</button>
@@ -129,6 +131,7 @@
         <div class="qa-grid">
           <label>Status<select id="d-status" data-field="status"></select></label>
           <label>Handler<select id="d-handler" data-field="handler"></select></label>
+          <label>Reviewer<select id="d-reviewer" data-field="reviewer"></select></label>
           <label>System<select id="d-system" data-field="system"></select></label>
           <label>AXO Category<select id="d-cat" data-field="axoCategory"></select></label>
           <label>Quarter<select id="d-quarter" data-field="quarter"></select></label>
@@ -241,6 +244,22 @@
       <div class="dlg-foot">
         <button class="btn" type="button" id="me-cancel">Cancel</button>
         <button class="btn btn-primary" type="submit">Continue</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Set status on several AXOs -->
+  <dialog id="st-dlg">
+    <form id="st-form">
+      <div class="dlg-head"><h2 id="st-title">Set status</h2>
+        <p>Every selected AXO moves to this status. Review Points isn't here: points are written for one AXO at a time.</p></div>
+      <div class="dlg-body">
+        <label class="dlg-field">Status<select id="st-select"></select></label>
+        <div class="dlg-err" id="st-err" hidden></div>
+      </div>
+      <div class="dlg-foot">
+        <button class="btn" type="button" id="st-cancel">Cancel</button>
+        <button class="btn btn-primary" type="submit" id="st-go">Save</button>
       </div>
     </form>
   </dialog>

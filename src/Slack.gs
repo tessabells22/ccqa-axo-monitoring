@@ -118,6 +118,32 @@ function onItemChanged_(before, after, actorName) {
   });
 }
 
+/** Tells the handler who picked up the review of their AXO (bot DM; quiet without a Slack ID). */
+function onReviewerClaimed_(item, actorName) {
+  if (!item.handler) return;
+  var memberId = (readLists_().slackIds || {})[item.handler];
+  if (!memberId) return;
+  slackDm_(memberId, {
+    text: item.reviewer + ' is reviewing AXO ' + item.id,
+    blocks: [{ type: 'section', text: { type: 'mrkdwn', text: ':eyes: *' + esc_(item.reviewer) + '* is reviewing ' + itemLink_(item) + '  ' + esc_(item.name) } }]
+  });
+}
+
+/** One channel post for a batch of status changes made with Set status. */
+function onBulkStatus_(items, status, actorName) {
+  var cfg = slackConfig_();
+  if (!cfg.webhook || !items.length || cfg.statuses.indexOf(status) < 0) return;
+  var list = items.slice(0, 15).map(function (i) { return '• ' + itemLink_(i) + '  ' + esc_(i.name); }).join('\n') +
+    (items.length > 15 ? '\n…and ' + (items.length - 15) + ' more' : '');
+  slackPost_({
+    text: items.length + ' AXOs moved to ' + status + ' by ' + (actorName || 'someone'),
+    blocks: [
+      { type: 'section', text: { type: 'mrkdwn', text: '*' + items.length + ' AXO' + (items.length === 1 ? '' : 's') + ' → ' + esc_(status) + '*\n' + list } },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: 'by ' + esc_(actorName || 'someone') }] }
+    ]
+  });
+}
+
 /** Blocker notes always ping; other notes stay in the tracker. */
 function onNoteAdded_(item, note, actorName) {
   if (note.kind !== 'Blocker') return;
@@ -191,11 +217,18 @@ function sendNudges() {
   var result = { due: due.length, dms: 0, channel: 0, failed: 0 };
   if (!due.length) { console.log('Nudges: nothing has been in one status for ' + NUDGE_AFTER_DAYS + '+ working days.'); return result; }
 
-  var byHandler = {};
-  due.forEach(function (i) { (byHandler[i.handler || ''] = byHandler[i.handler || ''] || []).push(i); });
+  // While an AXO waits in For Review, the nudge goes to its reviewer; with no reviewer yet,
+  // to the channel. Everything else goes to the handler.
+  var byHandler = {}, role = {};
+  due.forEach(function (i) {
+    var t = nudgeTarget(i), key = t.role === 'unclaimed' ? '__unclaimed' : t.name;
+    role[i.id] = t.role;
+    (byHandler[key] = byHandler[key] || []).push(i);
+  });
   var ids = readLists_().slackIds || {};
   var line = function (i) {
-    return '• ' + itemLink_(i) + '  ' + esc_(i.name) + '\n     *' + esc_(i.status) + '* for ' + i.daysInStatus + ' working days';
+    return '• ' + itemLink_(i) + '  ' + esc_(i.name) + '\n     *' + esc_(i.status) + '* for ' + i.daysInStatus + ' working days' +
+      (role[i.id] === 'reviewer' ? ' · you are the reviewer' : '');
   };
   var lines = function (list) {
     return list.slice(0, 20).map(line).join('\n') + (list.length > 20 ? '\n…and ' + (list.length - 20) + ' more' : '');
@@ -205,7 +238,7 @@ function sendNudges() {
   Object.keys(byHandler).forEach(function (h) {
     var list = byHandler[h].sort(function (a, b) { return b.daysInStatus - a.daysInStatus; });
     var head = list.length === 1 ? '1 AXO of yours has' : list.length + ' AXOs of yours have';
-    var dm = h && ids[h] ? slackDm_(ids[h], {
+    var dm = h && h !== '__unclaimed' && ids[h] ? slackDm_(ids[h], {
       text: head + ' been in the same status for ' + NUDGE_AFTER_DAYS + '+ working days',
       blocks: [
         { type: 'section', text: { type: 'mrkdwn', text: ':hourglass_flowing_sand: *' + head + ' been in the same status for ' + NUDGE_AFTER_DAYS + '+ working days*\n' + lines(list) } },
@@ -218,11 +251,11 @@ function sendNudges() {
 
   if (leftover.length) {
     var text = ':hourglass_flowing_sand: *In the same status for ' + NUDGE_AFTER_DAYS + '+ working days*\n' + leftover.map(function (g) {
-      return '*' + (g.handler ? who_(g.handler) : 'No handler') + '*\n' + lines(g.list);
+      return '*' + (g.handler === '__unclaimed' ? 'For Review, no reviewer yet' : g.handler ? who_(g.handler) : 'No handler') + '*\n' + lines(g.list);
     }).join('\n');
     var posted = slackPost_({ text: 'AXOs in the same status for ' + NUDGE_AFTER_DAYS + '+ working days', blocks: [
       { type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 2900) } },
-      { type: 'context', elements: [{ type: 'mrkdwn', text: 'Posted here because these handlers could not be sent a DM.' }] }] });
+      { type: 'context', elements: [{ type: 'mrkdwn', text: 'Posted here because these could not be sent as a DM. For Review AXOs without a reviewer: claim one in the tracker with Review it.' }] }] });
     leftover.forEach(function (g) {
       if (posted) { result.channel += g.list.length; nudged = nudged.concat(g.list); } else result.failed += g.list.length;
     });
