@@ -757,7 +757,6 @@
   // Follows the team's "Test File Submission Drafter" wording.
   var mail = { ids: [], edited: false };
 
-  function firstName(name) { return String(name || '').replace(/\s*-\s*QA$/i, '').trim(); }
   function store(key, v) { try { if (v === undefined) return localStorage.getItem(key) || ''; localStorage.setItem(key, v); } catch (e) { return ''; } }
 
   /** "ERPIS 5.4": the AXO's category plus its release number. */
@@ -793,7 +792,6 @@
   function mailDraft(items, release, greeting) {
     var p = mailParts(items);
     var rel = release.trim(), greet = greeting.trim() || 'Team';
-    var sign = 'Thanks, ' + (firstName(me()) || '');
     var relHtml = rel ? '<b>' + esc(rel) + '</b>' : '<b><span class="ph">[release]</span></b>';
     var relText = rel || '[release]';
     // Shaped like Outlook's own messages: one div per line, a blank div between paragraphs,
@@ -812,8 +810,9 @@
     }
     var c1 = 'Kindly advise if there are scenarios or cases missing, or if changes are necessary.';
     var c2 = 'Otherwise, kindly update the workflow step to the next one.';
-    h.push(P + c1 + '</div>' + BR, P + c2 + '</div>' + BR, P + esc(sign) + '</div>');
-    t.push('', c1, '', c2, '', sign);
+    // No sign-off: Outlook adds the person's own signature.
+    h.push(P + c1 + '</div>' + BR, P + c2 + '</div>');
+    t.push('', c1, '', c2);
     var nums = items.map(function (i) { return i.id; });
     return {
       html: h.join(''), text: t.join('\n'),
