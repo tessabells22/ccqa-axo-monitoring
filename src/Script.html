@@ -724,72 +724,166 @@
   }
 
   // ------------------------------------------------------------ email (Outlook draft)
-  function mailText(item) {
-    var first = function (name) { return String(name || '').replace(/\s*-\s*QA$/i, ''); };
-    var clip = function (t) { t = String(t || '').trim(); return t.length > 400 ? t.slice(0, 400) + '…' : t; };
-    var lines = [
-      'Hi,', '',
-      'AXO ' + item.id + ': ' + item.name, '',
-      'Item Type: ' + item.itemType,
-      'AXO Category: ' + (item.axoCategory || '-'),
-      'Priority: ' + (item.priority || '-') + (item.highPriority ? ' (High Priority)' : ''),
-      'Workflow Step: ' + (item.workflowStep || '-'),
-      'Developer: ' + (item.developer || '-'),
-      'BA: ' + (item.reportedBy || '-'),
-      'Quarter: ' + (item.quarter || '-'),
-      'System: ' + (item.system || '-'),
-      'Handler: ' + (item.handler || 'Unassigned'),
-      'Status: ' + (item.status || 'Not started') + (item.daysInStatus != null ? ' (' + item.daysInStatus + ' working day' + (item.daysInStatus === 1 ? '' : 's') + ')' : ''),
-      'Date of Completion: ' + (item.completedOn || '-')
-    ];
-    // The three most recent team notes (the panel loads them when the AXO is opened).
-    var notes = (S.notesById[item.id] || []).slice(0, 3);
-    if (notes.length) {
-      lines.push('', 'Latest notes:');
-      notes.forEach(function (n) {
-        lines.push('- ' + fmtWhen(n.createdAt) + ', ' + n.author.replace(/\s*<.*>$/, '') + (n.kind !== 'General' ? ' (' + n.kind + ')' : '') + ': ' + clip(n.text));
-      });
+  // Follows the team's "Test File Submission Drafter" wording.
+  var mail = { ids: [], edited: false };
+
+  function firstName(name) { return String(name || '').replace(/\s*-\s*QA$/i, '').trim(); }
+  function store(key, v) { try { if (v === undefined) return localStorage.getItem(key) || ''; localStorage.setItem(key, v); } catch (e) { return ''; } }
+
+  /** "SERPCAR 3.8" from a remembered value, or from a name like "… for 3.8 Release". */
+  function guessRelease(items) {
+    var cat = items[0].axoCategory || '';
+    var saved = store('ccqa.release.' + cat);
+    if (saved) return saved;
+    for (var i = 0; i < items.length; i++) {
+      var m = /\b(\d+\.\d+)\s+Release\b/i.exec(items[i].name);
+      if (m) return (cat ? cat + ' ' : '') + m[1];
     }
-    if (S.appUrl) lines.push('', 'Tracker: ' + S.appUrl + '?axo=' + encodeURIComponent(item.id));
-    lines.push('', 'Thanks,', first(me()) || '');
-    return lines.join('\n');
+    return '';
   }
 
-  function mailLinks() {
+  function mailParts(items) {
+    var types = {};
+    items.forEach(function (i) { types[i.itemType] = true; });
+    var keys = Object.keys(types);
+    var type = keys.length === 1 && (keys[0] === 'Bug' || keys[0] === 'User Story') ? 'AXO ' + keys[0] : 'AXO';
+    var systems = {};
+    items.forEach(function (i) { systems[i.system || (i.axoCategory === 'SERPCAR' ? 'WD1' : 'DEV')] = true; });
+    var sys = Object.keys(systems).join(' / ');
+    var label = function (i) { return 'AXO ' + i.id + ' ' + i.name; };
+    return { type: type, sys: sys, labels: items.map(label), multi: items.length > 1 };
+  }
+
+  /** Builds the email as HTML (with bold) and as plain text. */
+  function mailDraft(items, release, greeting) {
+    var p = mailParts(items);
+    var rel = release.trim(), greet = greeting.trim() || 'Team';
+    var sign = 'Thanks, ' + (firstName(me()) || '');
+    var relHtml = rel ? '<b>' + esc(rel) + '</b>' : '<b><span class="ph">[release]</span></b>';
+    var relText = rel || '[release]';
+    var P = '<p style="margin:0 0 11pt">';
+    var h = [P + 'Hi ' + esc(greet) + ',</p>', P + 'Good day!</p>'];
+    var t = ['Hi ' + greet + ',', '', 'Good day!', ''];
+    if (p.multi) {
+      h.push(P + 'In line with ' + esc(p.type) + ' Testing for ' + relHtml + ' Release, please review the attached test files for the following, tested in ' + esc(p.sys) + ' System:</p>');
+      h.push('<ul style="margin:0 0 11pt;padding-left:24px">' + p.labels.map(function (l) { return '<li style="margin:0 0 4pt"><b>' + esc(l) + '</b></li>'; }).join('') + '</ul>');
+      t.push('In line with ' + p.type + ' Testing for ' + relText + ' Release, please review the attached test files for the following, tested in ' + p.sys + ' System:', '');
+      p.labels.forEach(function (l) { t.push('- ' + l); });
+    } else {
+      h.push(P + 'In line with ' + esc(p.type) + ' Testing for ' + relHtml + ' Release, please review the attached test file for <b>' + esc(p.labels[0]) + '</b> tested in ' + esc(p.sys) + ' System.</p>');
+      t.push('In line with ' + p.type + ' Testing for ' + relText + ' Release, please review the attached test file for ' + p.labels[0] + ' tested in ' + p.sys + ' System.');
+    }
+    var c1 = 'Kindly advise if there are scenarios or cases missing, or if changes are necessary.';
+    var c2 = 'Otherwise, kindly update the workflow step to the next one.';
+    h.push(P + c1 + '</p>', P + c2 + '</p>', P + esc(sign) + '</p>');
+    t.push('', c1, '', c2, '', sign);
+    var nums = items.map(function (i) { return i.id; });
+    return {
+      html: h.join(''), text: t.join('\n'),
+      subject: 'AXO ' + nums.join(', ') + ' - Test File' + (p.multi ? 's' : '') + ' for Review'
+    };
+  }
+
+  function textToHtml(text) {
+    return text.split(/\n{2,}/).map(function (para) {
+      return '<p style="margin:0 0 11pt">' + esc(para).replace(/\n/g, '<br>') + '</p>';
+    }).join('');
+  }
+
+  /** Current message: the template, or the person's own text once they edit it. */
+  function mailMessage() {
+    var items = mail.ids.map(function (id) { return S.byId[id]; }).filter(Boolean);
+    var d = mailDraft(items, $('mail-release').value, $('mail-greeting').value);
+    if (mail.edited) { d.text = $('mail-body').value; d.html = textToHtml(d.text); }
+    return d;
+  }
+
+  function mailRecipients() {
     var list = function (v) { return v.split(/[;,\s]+/).filter(Boolean); };
-    var to = list($('mail-to').value), cc = list($('mail-cc').value);
-    var subject = $('mail-subject').value, body = $('mail-body').value;
-    var addr = function (a) { return a.map(function (x) { return encodeURIComponent(x).replace(/%40/g, '@'); }).join(';'); };
-    // Outlook separates recipients with semicolons; line breaks must be CRLF in a mailto link.
-    var app = 'mailto:' + addr(to) + '?' + (cc.length ? 'cc=' + addr(cc) + '&' : '') +
-      'subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body.replace(/\r?\n/g, '\r\n'));
-    var web = 'https://outlook.office.com/mail/deeplink/compose?to=' + encodeURIComponent(to.join(';')) +
-      (cc.length ? '&cc=' + encodeURIComponent(cc.join(';')) : '') +
-      '&subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
-    $('mail-app').href = app;
-    $('mail-web').href = web;
+    return { to: list($('mail-to').value), cc: list($('mail-cc').value) };
+  }
+
+  function mailRefresh() {
+    var d = mailMessage();
+    if (!mail.edited) $('mail-body').value = d.text;
+    $('mail-preview').innerHTML = d.html;
+    $('mail-preview').hidden = mail.edited;
+    var r = mailRecipients();
+    // Outlook on the web only takes To, subject and plain text from a link; it ignores CC.
+    $('mail-web').href = 'https://outlook.office.com/mail/deeplink/compose?to=' + encodeURIComponent(r.to.join(';')) +
+      '&subject=' + encodeURIComponent($('mail-subject').value) + '&body=' + encodeURIComponent(d.text);
     var hint = $('mail-hint');
     hint.className = 'rp-to';
-    if (!to.length) {
+    if (!r.to.length) {
       hint.className = 'rp-to warn';
       hint.textContent = 'No recipients yet. Type them here, or set the defaults once in the Lists tab of the Google Sheet (Email To and Email CC columns).';
-    } else if (app.length > 1900) {
+    } else if (!$('mail-release').value.trim()) {
       hint.className = 'rp-to warn';
-      hint.textContent = 'This is a long message. If Outlook opens it cut short, use Copy text and paste it into the email.';
+      hint.textContent = 'Add the release (for example ERPIS 5.4). The tracker remembers it for next time.';
     } else {
-      hint.textContent = 'Nothing is sent from here: Outlook opens with this draft and you click Send.';
+      hint.innerHTML = '<b>Open in Outlook</b> downloads the draft; open the file and Outlook shows it as a new email with To, CC and bold text filled in. ' +
+        '<b>Outlook on the web</b> can\'t take CC or bold: add ' + (r.cc.length ? esc(r.cc.join('; ')) : 'CC') + ' there yourself.';
     }
   }
 
-  function openMail(id) {
-    var item = S.byId[id];
-    if (!item) return;
+  function openMail(ids) {
+    var items = ids.map(function (id) { return S.byId[id]; }).filter(Boolean);
+    if (!items.length) return;
+    mail.ids = items.map(function (i) { return i.id; });
+    mail.edited = false;
+    $('mail-title').textContent = items.length > 1 ? 'Email ' + items.length + ' test files for review' : 'Email test file for review';
     $('mail-to').value = S.emailTo.join('; ');
     $('mail-cc').value = S.emailCc.join('; ');
-    $('mail-subject').value = 'AXO ' + item.id + ' | ' + (item.status || 'Not started') + ' | ' + item.name;
-    $('mail-body').value = mailText(item);
-    mailLinks();
+    $('mail-release').value = guessRelease(items);
+    $('mail-greeting').value = store('ccqa.greeting') || 'Team';
+    $('mail-subject').value = mailDraft(items, '', '').subject;
+    $('mail-body').hidden = true;
+    $('mail-edit').hidden = false;
+    mailRefresh();
     $('mail-dlg').showModal();
+  }
+
+  // An .eml file opened in Outlook becomes a new, unsent draft (X-Unsent), with CC and HTML intact.
+  function b64(str) {
+    var bytes = new TextEncoder().encode(str), bin = '';
+    for (var i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+  function emlFile() {
+    var r = mailRecipients(), d = mailMessage(), subject = $('mail-subject').value;
+    var html = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#000">' + d.html + '</body></html>';
+    var wrap = function (s) { return s.replace(/.{1,76}/g, '$&\r\n'); };
+    var lines = [
+      'To: ' + r.to.join(', '),
+      r.cc.length ? 'Cc: ' + r.cc.join(', ') : '',
+      'Subject: =?UTF-8?B?' + b64(subject) + '?=',
+      'X-Unsent: 1',
+      'MIME-Version: 1.0',
+      'Content-Type: text/html; charset="UTF-8"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      wrap(b64(html))
+    ].filter(function (l, i) { return l !== '' || i === 7; });
+    return { text: lines.join('\r\n'), name: subject.replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 120) + '.eml' };
+  }
+
+  function copyMessage() {
+    var d = mailMessage();
+    var done = function () { toast('Message copied with its formatting. Paste it into the Outlook email.'); };
+    var plain = function () {
+      var t = $('mail-body'); var was = t.hidden; t.hidden = false; t.value = d.text; t.select();
+      document.execCommand('copy'); t.hidden = was; toast('Message copied as plain text.');
+    };
+    try {
+      if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+        navigator.clipboard.write([new ClipboardItem({
+          'text/html': new Blob(['<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt">' + d.html + '</div>'], { type: 'text/html' }),
+          'text/plain': new Blob([d.text], { type: 'text/plain' })
+        })]).then(done, plain);
+        return;
+      }
+    } catch (e) {}
+    plain();
   }
 
   // ------------------------------------------------------------ report
@@ -868,14 +962,30 @@
     $('del-form').addEventListener('submit', function (e) { e.preventDefault(); runDelete(); });
 
     // Email
-    $('d-email').addEventListener('click', function () { if (S.openId) openMail(S.openId); });
-    ['mail-to', 'mail-cc', 'mail-subject', 'mail-body'].forEach(function (id) { $(id).addEventListener('input', mailLinks); });
+    $('d-email').addEventListener('click', function () { if (S.openId) openMail([S.openId]); });
+    $('sel-email').addEventListener('click', function () { openMail(S.visible.filter(function (id) { return S.selected[id]; })); });
+    ['mail-to', 'mail-cc', 'mail-subject'].forEach(function (id) { $(id).addEventListener('input', mailRefresh); });
+    $('mail-release').addEventListener('input', function () {
+      var item = S.byId[mail.ids[0]];
+      if (item) store('ccqa.release.' + (item.axoCategory || ''), $('mail-release').value.trim());
+      mailRefresh();
+    });
+    $('mail-greeting').addEventListener('input', function () { store('ccqa.greeting', $('mail-greeting').value.trim()); mailRefresh(); });
+    $('mail-body').addEventListener('input', function () { mail.edited = true; mailRefresh(); });
+    $('mail-edit').addEventListener('click', function () {
+      $('mail-body').hidden = false; $('mail-edit').hidden = true; $('mail-preview').hidden = true;
+      $('mail-body').focus();
+    });
     $('mail-cancel').addEventListener('click', function () { $('mail-dlg').close(); });
-    $('mail-copy').addEventListener('click', function () {
-      var text = 'To: ' + $('mail-to').value + '\nCC: ' + $('mail-cc').value + '\nSubject: ' + $('mail-subject').value + '\n\n' + $('mail-body').value;
-      var done = function () { toast('Copied. Paste it into a new Outlook email.'); };
-      var fallback = function () { $('mail-body').select(); document.execCommand('copy'); done(); };
-      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+    $('mail-copy').addEventListener('click', copyMessage);
+    $('mail-eml').addEventListener('click', function () {
+      var f = emlFile();
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([f.text], { type: 'message/rfc822' }));
+      a.download = f.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 60000);
+      toast('Draft downloaded. Open ' + f.name + ' and Outlook shows it as a new email. Attach the test file, then Send.');
     });
 
     // Report

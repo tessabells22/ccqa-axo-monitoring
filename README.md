@@ -97,7 +97,19 @@ Sections: summary, status breakdown by Bug and User Story, by AXO category, QA w
 
 ### Email
 
-**Email** in an AXO's panel opens a draft with the AXO's details. *Open in Outlook app* uses the computer's default mail app; *Open in Outlook on the web* opens Outlook in the browser. Nothing is sent by the tracker: the person reviews the draft and clicks Send, so it goes from their own work email. Default recipients come from the **Email To** and **Email CC** columns in the Lists tab, one address per row.
+**Email** in an AXO's panel drafts the test file submission email, worded like the team's Test File Submission Drafter: greeting, the AXO type and **release**, the AXO in bold, the system it was tested in, and the standard closing. To send several test files in one email, tick the AXOs in the table and click **Email test files** in the selection bar.
+
+- **Release** (for example `ERPIS 5.4`) isn't in the AXO export, so it's typed once and remembered per category on that browser. If an AXO's name says "for 3.8 Release", that number is suggested.
+- **System** comes from the AXO's System; if it's empty, SERPCAR defaults to WD1 and ERPIS to DEV.
+- Default **To** and **CC** come from the **Email To** and **Email CC** columns in the Lists tab, one address per row.
+
+Buttons:
+
+- **Open in Outlook** downloads the draft as an `.eml` file. Opening it shows a new, unsent email in Outlook with To, CC, subject and bold text filled in. This is the reliable option.
+- **Outlook on the web** opens a new email in the browser with To, subject and the text. Outlook on the web does not accept CC or formatting from a link, so add CC there.
+- **Copy message** copies the text with its formatting, to paste into any email.
+
+Nothing is sent by the tracker: the person attaches the test file and clicks Send, from their own work email.
 
 Sending with no draft step would need your Microsoft 365 admin to approve an app with permission to send mail (Microsoft Graph `Mail.Send`) or a Power Automate flow with a premium HTTP trigger.
 

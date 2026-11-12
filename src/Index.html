@@ -83,6 +83,7 @@
         <button class="btn btn-sm btn-quiet" id="sel-all" type="button"></button>
         <span class="grow"></span>
         <button class="btn btn-sm" id="sel-clear" type="button">Clear selection</button>
+        <button class="btn btn-sm" id="sel-email" type="button">Email test files</button>
         <button class="btn btn-sm btn-danger" id="sel-delete" type="button">Delete selected</button>
       </div>
       <div class="table-scroll">
@@ -262,20 +263,28 @@
 
   <!-- Email -->
   <dialog id="mail-dlg" class="dlg-wide">
-    <div class="dlg-head"><h2>Email this AXO</h2>
-      <p>Opens a new email in Outlook with everything below filled in. Check it there and click Send; it goes from your own work email.</p></div>
+    <div class="dlg-head"><h2 id="mail-title">Email test file for review</h2>
+      <p>Drafts the test file submission email. Nothing is sent from here: you check it in Outlook, attach the test file and click Send, from your own work email.</p></div>
     <div class="dlg-body">
-      <label class="dlg-field">To<input id="mail-to" spellcheck="false"></label>
-      <label class="dlg-field">CC<input id="mail-cc" spellcheck="false"></label>
+      <div class="mail-grid">
+        <label class="dlg-field">To<input id="mail-to" spellcheck="false"></label>
+        <label class="dlg-field">CC<input id="mail-cc" spellcheck="false"></label>
+        <label class="dlg-field">Release<input id="mail-release" placeholder="ERPIS 5.4" spellcheck="false"></label>
+        <label class="dlg-field">Greeting<input id="mail-greeting" placeholder="Team"></label>
+      </div>
       <label class="dlg-field">Subject<input id="mail-subject"></label>
-      <label class="dlg-field">Message<textarea id="mail-body"></textarea></label>
+      <div class="dlg-field">Message
+        <div class="mail-preview" id="mail-preview"></div>
+        <textarea id="mail-body" hidden aria-label="Message text"></textarea>
+        <button type="button" class="linkish" id="mail-edit">Edit the text</button>
+      </div>
       <p class="rp-to" id="mail-hint"></p>
     </div>
     <div class="dlg-foot">
       <button class="btn" type="button" id="mail-cancel">Close</button>
-      <button class="btn" type="button" id="mail-copy">Copy text</button>
-      <a class="btn" id="mail-web" target="_blank" rel="noopener">Open in Outlook on the web</a>
-      <a class="btn btn-primary" id="mail-app" target="_blank" rel="noopener">Open in Outlook app</a>
+      <button class="btn" type="button" id="mail-copy">Copy message</button>
+      <a class="btn" id="mail-web" target="_blank" rel="noopener">Outlook on the web</a>
+      <button class="btn btn-primary" type="button" id="mail-eml">Open in Outlook</button>
     </div>
   </dialog>
 

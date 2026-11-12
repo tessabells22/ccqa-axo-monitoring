@@ -318,7 +318,17 @@ a.btn{text-decoration:none;display:inline-block;color:var(--fg)}
 a.btn.btn-primary{color:var(--brand-ink)}
 dialog.dlg-wide{width:min(680px,calc(100vw - 32px))}
 dialog.dlg-wide .dlg-foot{flex-wrap:wrap}
-#mail-body{min-height:250px;font-family:var(--mono);font-size:12.5px}
+#mail-body{min-height:220px;font-family:var(--body);font-size:13.5px}
+.mail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 12px}
+@media (max-width:620px){.mail-grid{grid-template-columns:minmax(0,1fr)}}
+/* Shown the way Outlook will show it: white page, Calibri-like type, in both themes. */
+.mail-preview{font:400 14.5px/1.5 Calibri,Carlito,Arial,sans-serif;letter-spacing:0;text-transform:none;color:#1d2634;background:#fff;
+  border:1px solid var(--line-strong);border-radius:6px;padding:14px 16px;max-height:300px;overflow:auto}
+.mail-preview p{margin:0 0 11px}
+.mail-preview ul{margin:0 0 11px;padding-left:22px}
+.mail-preview .ph{background:#fdefd8;color:#8a5303;padding:0 4px;border-radius:3px}
+.linkish{align-self:flex-start;background:none;border:0;padding:4px 0;color:var(--brand);font:500 12.5px/1.2 var(--body);letter-spacing:0;text-transform:none;cursor:pointer}
+.linkish:hover{text-decoration:underline}
 .result .btn{margin-left:8px}
 
 /* ---------- report ---------- */
