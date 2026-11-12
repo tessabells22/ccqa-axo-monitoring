@@ -84,6 +84,7 @@ function setup() {
   formatItems_(items);
   backfillStatusSince_(items);
   PropertiesService.getScriptProperties().setProperty('SCHEMA_VERSION', SCHEMA_VERSION);
+  console.log('Setup complete');
   return 'Setup complete';
 }
 

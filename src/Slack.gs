@@ -189,7 +189,7 @@ function sendNudges() {
   var due = readItems_().rows.map(function (r) { return rowToItem_(r.values, today); })
     .filter(function (i) { return nudgeDue(i, today); });
   var result = { due: due.length, dms: 0, channel: 0, failed: 0 };
-  if (!due.length) return result;
+  if (!due.length) { console.log('Nudges: nothing has been in one status for ' + NUDGE_AFTER_DAYS + '+ working days.'); return result; }
 
   var byHandler = {};
   due.forEach(function (i) { (byHandler[i.handler || ''] = byHandler[i.handler || ''] || []).push(i); });
@@ -238,6 +238,7 @@ function sendNudges() {
       });
     });
   }
+  console.log('Nudges: ' + result.due + ' AXOs due, ' + result.dms + ' DMs sent, ' + result.channel + ' AXOs posted to the channel, ' + result.failed + ' not sent.');
   return result;
 }
 
@@ -259,7 +260,9 @@ function installTriggers() {
   WORK_DAYS.forEach(function (d) {
     ScriptApp.newTrigger('sendNudges').timeBased().onWeekDay(ScriptApp.WeekDay[names[d]]).atHour(hour).create();
   });
-  return 'Scheduled: weekly digest on Tuesdays at 5 AM, nudges Tuesday to Saturday at ' + hour + ':00 (' + TZ + ')';
+  var msg = 'Scheduled: weekly digest on Tuesdays at 5 AM, nudges Tuesday to Saturday at ' + hour + ':00 (' + TZ + ')';
+  console.log(msg);
+  return msg;
 }
 
 /** Says who Slack will send DMs as, so a wrong token is caught before anyone gets a message. */
@@ -283,6 +286,8 @@ function checkSlackSetup() {
   var handlers = readLists_()['Handler'] || [];
   var missing = handlers.filter(function (h) { return !ids[h]; });
   out.push(missing.length ? 'Handlers with no Slack ID in the Lists tab: ' + missing.join(', ') + '.' : 'Every handler has a Slack ID.');
+  // Run from the Apps Script editor, a return value is not shown anywhere; the Execution log is.
+  console.log(out.join('\n'));
   return out.join('\n');
 }
 
@@ -293,5 +298,6 @@ function checkSlackSetupMenu() {
 function testSlack() {
   var ok = slackPost_({ text: 'CCQA AXO Tracker is connected to this channel.' });
   if (!ok) throw new Error('Slack did not accept the message. Check SLACK_WEBHOOK_URL in Script properties.');
+  console.log('Test message sent to the Slack channel.');
   return 'Sent';
 }
