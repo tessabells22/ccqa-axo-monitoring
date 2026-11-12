@@ -39,7 +39,26 @@
     });
   }
   function me() { try { return localStorage.getItem('ccqa.me') || ''; } catch (e) { return ''; } }
-  function setMe(v) { try { localStorage.setItem('ccqa.me', v); } catch (e) {} }
+  function setMe(v) { try { localStorage.setItem('ccqa.me', v); } catch (e) {} showMe(); }
+  /** Flags the top-bar name picker while no name is set. */
+  function showMe() {
+    var wrap = document.querySelector('.me');
+    if (wrap) wrap.classList.toggle('missing', !me());
+  }
+
+  // Every change needs a name. Without one, ask for it, then carry on with what the person was doing.
+  var afterMe = null;
+  function withMe(fn) {
+    if (me()) { fn(); return true; }
+    afterMe = fn;
+    $('me-dlg-select').innerHTML = options(S.lists.handlers || [], '', 'Pick your name');
+    $('me-err').hidden = true;
+    var wrap = document.querySelector('.me');
+    wrap.classList.remove('nudge'); void wrap.offsetWidth; wrap.classList.add('nudge');
+    $('me-dlg').showModal();
+    $('me-dlg-select').focus();
+    return false;
+  }
   function group(status) {
     if (!status) return 'Not Started';
     return (S.statusMap[status] && S.statusMap[status].group) || 'In Progress';
@@ -104,7 +123,7 @@
       S.emailTo = data.emailTo || [];
       S.emailCc = data.emailCc || [];
       S.loadedAt = Date.now();
-      if (initial) setupControls(data);
+      if (initial) { setupControls(data); showMe(); }
       renderLede(data);
       renderQuarters();
       render();
@@ -448,6 +467,13 @@
     if (!item) return;
     var prev = item[field];
     if (prev === value) return;
+    if (!me()) {
+      // Put the control back as it was, then ask for the name and redo the change.
+      replaceRow(id);
+      if (S.openId === id) fillDrawerFields(item);
+      withMe(function () { save(id, field, value); });
+      return;
+    }
     if (field === 'status' && value === 'Review Points') {
       replaceRow(id);
       if (S.openId === id) fillDrawerFields(item);
@@ -665,9 +691,6 @@
     if (!S.deleteEnabled) {
       showErr('del-err', 'Deleting is switched off until the tracker owner sets a delete passcode (DELETE_PASSCODE in the script settings).');
       $('del-go').disabled = true;
-    } else if (!me()) {
-      showErr('del-err', 'Pick your name in the top bar first, so the delete is logged under it.');
-      $('del-go').disabled = true;
     }
     $('del-dlg').showModal();
     $('del-pass').focus();
@@ -833,7 +856,7 @@
     $('sel-head').addEventListener('change', function (e) { selectAllVisible(e.target.checked); });
     $('sel-all').addEventListener('click', function () { selectAllVisible(true); });
     $('sel-clear').addEventListener('click', function () { selectAllVisible(false); });
-    $('sel-delete').addEventListener('click', openDelete);
+    $('sel-delete').addEventListener('click', function () { withMe(openDelete); });
     $('del-cancel').addEventListener('click', function () { $('del-dlg').close(); });
     $('del-form').addEventListener('submit', function (e) { e.preventDefault(); runDelete(); });
 
@@ -872,7 +895,7 @@
     });
 
     $('rp-cancel').addEventListener('click', function () { $('rp-dlg').close(); });
-    $('d-rp-btn').addEventListener('click', function () { if (S.openId) openReview(S.openId); });
+    $('d-rp-btn').addEventListener('click', function () { var id = S.openId; if (id) withMe(function () { openReview(id); }); });
     $('rp-form').addEventListener('submit', function (e) {
       e.preventDefault();
       var id = rpId, text = $('rp-text').value.trim(), reviewer = $('rp-reviewer').value;
@@ -900,6 +923,21 @@
         showErr('rp-err', err.message);
       });
     });
+
+    $('me-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var v = $('me-dlg-select').value;
+      if (!v) { showErr('me-err', 'Pick your name to continue.'); return; }
+      setMe(v);
+      $('me-select').value = v;
+      if ($('f-handler').value === '__me') renderTable();
+      $('me-dlg').close();
+      var fn = afterMe; afterMe = null;
+      toast('Signed in as ' + v);
+      if (fn) fn();
+    });
+    $('me-cancel').addEventListener('click', function () { afterMe = null; $('me-dlg').close(); });
+    $('me-dlg').addEventListener('close', function () { afterMe = null; });
 
     $('me-select').addEventListener('change', function (e) {
       setMe(e.target.value);
@@ -999,6 +1037,7 @@
       e.preventDefault();
       var id = S.openId, text = $('note-text').value.trim(), kind = $('note-kind').value;
       if (!id || !text) return;
+      if (!me()) { withMe(function () { $('note-form').requestSubmit(); }); return; }
       $('note-add').disabled = true;
       busy(1);
       call('addNote', id, kind, text, me()).then(function (note) {
@@ -1021,7 +1060,8 @@
     });
 
     // Import dialog
-    $('import-btn').addEventListener('click', function () {
+    $('import-btn').addEventListener('click', function () { withMe(openImport); });
+    function openImport() {
       importText = null;
       $('import-go').disabled = true;
       $('import-err').hidden = true; $('import-result').hidden = true;
@@ -1029,7 +1069,7 @@
       $('drop-sub').textContent = 'Item Type is mapped on import: defects → Bug, features → User Story';
       $('import-quarter').innerHTML = quarterOptions(selectedQuarter() || S.currentQuarter);
       $('import-dlg').showModal();
-    });
+    }
     $('import-cancel').addEventListener('click', function () { $('import-dlg').close(); });
     $('import-go').addEventListener('click', function () { runImport(false); });
     $('import-result').addEventListener('click', function (e) { if (e.target.id === 'import-readd') runImport(true); });
@@ -1042,7 +1082,7 @@
     drop.addEventListener('drop', function (e) { pickFile(e.dataTransfer.files[0]); });
 
     // Add dialog
-    $('add-btn').addEventListener('click', openAdd);
+    $('add-btn').addEventListener('click', function () { withMe(openAdd); });
     $('add-cancel').addEventListener('click', function () { $('add-dlg').close(); });
     $('add-form').addEventListener('submit', function (e) {
       e.preventDefault();

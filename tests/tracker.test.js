@@ -529,3 +529,20 @@ test('bootstrap carries what the new screens need', () => {
   assert.match(boot.today, /^\d{4}-\d{2}-\d{2}$/);
   assert.match(boot.appUrl, /\/exec$/);
 });
+
+test('every change needs a name, checked on the server too', () => {
+  const g = fresh({ props: { DELETE_PASSCODE: 'pw' } });
+  const need = /Pick your name in the top bar/;
+  assert.throws(() => g.ctx.importCsv(CSV, ''), need);
+  assert.throws(() => g.ctx.importCsv(CSV, '   '), need);
+  g.ctx.importCsv(CSV, 'Tessa - QA');
+  assert.throws(() => g.ctx.updateItem('20001', { status: 'Done' }, ''), need);
+  assert.throws(() => g.ctx.updateItem('20001', { status: 'Done' }), need, 'missing argument');
+  assert.throws(() => g.ctx.addItem({ id: '30001', name: 'x' }, ''), need);
+  assert.throws(() => g.ctx.addNote('20001', 'General', 'hi', ''), need);
+  assert.throws(() => g.ctx.setReviewPoints('20001', 'p', ''), /Pick your name/);
+  assert.throws(() => g.ctx.deleteItems(['20001'], 'pw', ''), need);
+  const item = g.ctx.getBootstrap().items.find((i) => i.id === '20001');
+  assert.strictEqual(item.status, '', 'nothing was changed');
+  assert.strictEqual(g.ctx.getBootstrap().items.length, 5, 'nothing was added or deleted');
+});

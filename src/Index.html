@@ -228,6 +228,22 @@
     </form>
   </dialog>
 
+  <!-- Name required before any change -->
+  <dialog id="me-dlg">
+    <form id="me-form">
+      <div class="dlg-head"><h2>Who's making this change?</h2>
+        <p>Pick your name before changing anything in the tracker. Every edit, note and import is signed with it. The tracker remembers it on this browser.</p></div>
+      <div class="dlg-body">
+        <label class="dlg-field">Your name<select id="me-dlg-select" required></select></label>
+        <div class="dlg-err" id="me-err" hidden></div>
+      </div>
+      <div class="dlg-foot">
+        <button class="btn" type="button" id="me-cancel">Cancel</button>
+        <button class="btn btn-primary" type="submit">Continue</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- Delete -->
   <dialog id="del-dlg">
     <form id="del-form">

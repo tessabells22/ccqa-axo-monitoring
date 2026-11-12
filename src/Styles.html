@@ -53,6 +53,11 @@ button,input,select,textarea{font:inherit;color:inherit}
 .role{font:500 11px/1 var(--body);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);padding:6px 10px;border-radius:999px}
 .me{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted)}
 .me select{border:1px solid var(--line-strong);background:var(--surface);border-radius:6px;padding:5px 8px;font-size:13px;max-width:150px}
+/* No name picked yet: the tracker is read-only until there is one. */
+.me.missing{color:var(--bad);font-weight:600}
+.me.missing select{border-color:var(--bad);box-shadow:0 0 0 2px var(--bad-soft);color:var(--bad);font-weight:600}
+.me.nudge select{animation:me-nudge .6s ease-in-out 2}
+@keyframes me-nudge{0%,100%{transform:none}25%{transform:translateX(-3px)}75%{transform:translateX(3px)}}
 .sync{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);background:var(--surface-2);border-radius:999px;padding:5px 11px 5px 9px;white-space:nowrap}
 .sync i{width:7px;height:7px;border-radius:50%;background:var(--ok)}
 .sync.busy i{background:var(--sky)} .sync.err i{background:var(--bad)}

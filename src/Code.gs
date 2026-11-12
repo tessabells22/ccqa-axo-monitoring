@@ -312,6 +312,11 @@ function findRow_(id) {
   return null;
 }
 
+/** Every change is signed: the web app sends the name picked in the top bar. */
+function requireActor_(name) {
+  if (!String(name == null ? '' : name).trim()) throw new Error('Pick your name in the top bar before making changes.');
+}
+
 function actor_(name) {
   var email = '';
   try { email = Session.getActiveUser().getEmail(); } catch (e) {}
@@ -399,6 +404,7 @@ function getBootstrap() {
 
 /** Writes only the fields in `patch`, so two people editing different fields don't clobber each other. */
 function updateItem(id, patch, actorName) {
+  requireActor_(actorName);
   return withLock_(function () {
     var hit = findRow_(id);
     if (!hit) throw new Error('AXO ' + id + ' is no longer in the tracker.');
@@ -459,6 +465,7 @@ function parseDay_(s) {
 
 /** Adds an item by hand (for AXOs not yet in an export). */
 function addItem(item, actorName) {
+  requireActor_(actorName);
   return withLock_(function () {
     var id = String(item && item.id || '').trim();
     if (!/^\d+$/.test(id)) throw new Error('AXO ID must be a number.');
@@ -491,6 +498,7 @@ function addItem(item, actorName) {
  * from the tracker are skipped unless `readdDeleted` is true (they then come in as new).
  */
 function importCsv(csvText, actorName, quarter, readdDeleted) {
+  requireActor_(actorName);
   var incoming = csvToItems(parseCsv(csvText));
   if (quarter && !isQuarter(quarter)) throw new Error('Quarter must look like Q4 2026.');
   quarter = quarter || currentQuarter_();
@@ -625,6 +633,7 @@ function deleteItems(ids, passcode, actorName) {
   var want = {};
   (ids || []).forEach(function (id) { if (String(id).trim()) want[String(id).trim()] = true; });
   if (!Object.keys(want).length) throw new Error('Select at least one AXO to delete.');
+  requireActor_(actorName);
   checkPasscode_(passcode);
   return withLock_(function () {
     var data = readItems_();
@@ -717,6 +726,7 @@ function noteToObj_(r) {
 }
 
 function addNote(id, kind, text, actorName) {
+  requireActor_(actorName);
   if (kind === REVIEW_KIND) throw new Error('Use the review points form to send review points.');
   return withLock_(function () {
     var hit = findRow_(id);
