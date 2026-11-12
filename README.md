@@ -95,23 +95,23 @@ A later import skips AXOs that are in the Deleted tab, so a deleted AXO doesn't 
 
 Sections: summary, status breakdown by Bug and User Story, by AXO category, QA workload (including completed, review points received and reviews given in the period), activity in the period, completed in the period, needs attention (2+ working days in one status, high priority still open, blockers raised), and an optional full AXO list.
 
+### Release
+
+Each AXO has a **Release** field (in its panel), holding the number only, for example `5.4`. The tracker shows it with the category in front (`ERPIS 5.4`, `SERPCAR 3.8`), taken from the AXO Category, and the email uses it. To set it on many AXOs at once, tick them and click **Set release** in the selection bar. If someone types `ERPIS 5.4`, the prefix is dropped and `5.4` is stored.
+
 ### Email
 
-**Email** in an AXO's panel drafts the test file submission email, worded like the team's Test File Submission Drafter: greeting, the AXO type and **release**, the AXO in bold, the system it was tested in, and the standard closing. To send several test files in one email, tick the AXOs in the table and click **Email test files** in the selection bar.
+**Email** in an AXO's panel drafts the test file submission email, worded like the team's Test File Submission Drafter: greeting, the AXO type and **release**, the AXO in bold, the system it was tested in, and the standard closing. To send several test files in one email, tick the AXOs and click **Email test files** in the selection bar.
 
-- **Release** (for example `ERPIS 5.4`) isn't in the AXO export, so it's typed once and remembered per category on that browser. If an AXO's name says "for 3.8 Release", that number is suggested.
+- **Release** comes from the AXOs' Release field. If none is set, a name like "for 3.8 Release" is used, or it can be typed in the email box.
 - **System** comes from the AXO's System; if it's empty, SERPCAR defaults to WD1 and ERPIS to DEV.
 - Default **To** and **CC** come from the **Email To** and **Email CC** columns in the Lists tab, one address per row.
 
-Buttons:
+**Open in Outlook on the web** opens a new email with To, CC and subject filled in, and copies the message. Clicking in the message area and pressing Ctrl+V (⌘V on a Mac) pastes it with its bold text. The copied message sets no font, so it takes the person's Outlook default font. A link can only carry plain text, which is why the message is pasted rather than sent in the link. CC travels in the `mailtouri` part of the link, the form Outlook on the web uses for email links.
 
-- **Open in Outlook** downloads the draft as an `.eml` file. Opening it shows a new, unsent email in Outlook with To, CC, subject and bold text filled in. This is the reliable option.
-- **Outlook on the web** opens a new email in the browser with To, subject and the text. Outlook on the web does not accept CC or formatting from a link, so add CC there.
-- **Copy message** copies the text with its formatting, to paste into any email.
+**Copy message** copies the formatted text on its own. **Download .eml** is for the Outlook desktop app: opening the file there gives a new draft with To, CC and bold text.
 
-Nothing is sent by the tracker: the person attaches the test file and clicks Send, from their own work email.
-
-Sending with no draft step would need your Microsoft 365 admin to approve an app with permission to send mail (Microsoft Graph `Mail.Send`) or a Power Automate flow with a premium HTTP trigger.
+Nothing is sent by the tracker: the person attaches the test file and clicks Send, from their own work email. Sending with no draft step would need your Microsoft 365 admin to approve an app with permission to send mail (Microsoft Graph `Mail.Send`) or a Power Automate flow with a premium HTTP trigger.
 
 ## Deployment: Apps Script or a cloud platform?
 

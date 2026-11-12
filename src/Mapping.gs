@@ -33,7 +33,8 @@ var ITEM_COLUMNS = [
   { key: 'inLatestImport', header: 'In Latest Import' },
   // Added later, so they sit at the end: existing sheets keep their column order.
   { key: 'statusSince',   header: 'Status Since' },   // when the current Status was set
-  { key: 'lastNudged',    header: 'Last Nudged' }     // last Slack nudge for the current Status
+  { key: 'lastNudged',    header: 'Last Nudged' },    // last Slack nudge for the current Status
+  { key: 'release',       header: 'Release',            editable: true }  // e.g. 5.4; the email adds ERPIS/SERPCAR
 ];
 
 var NOTE_COLUMNS = ['Note ID', 'AXO ID', 'Kind', 'Note', 'Author', 'Created At'];
@@ -87,6 +88,11 @@ function deriveCategory(name) {
   if (/^ERPIS\b/.test(n)) return 'ERPIS';
   if (/^SERPC(AR)?\b/.test(n)) return 'SERPCAR';
   return '';
+}
+
+/** "ERPIS 5.4" -> "5.4": the category prefix comes from the AXO's category, so it isn't stored. */
+function cleanRelease(v) {
+  return String(v == null ? '' : v).trim().replace(/^(ERPIS|SERPCAR|SERPC)\b[\s:-]*/i, '').replace(/\s+release$/i, '').trim();
 }
 
 /** "Q4 2026" for a year and 1-based month. */
@@ -227,7 +233,7 @@ if (typeof module !== 'undefined') {
   module.exports = {
     ITEM_COLUMNS: ITEM_COLUMNS, STATUSES: STATUSES, DEFAULT_LISTS: DEFAULT_LISTS,
     mapItemType: mapItemType, deriveCategory: deriveCategory, statusGroup: statusGroup,
-    quarterLabel: quarterLabel, isQuarter: isQuarter, quarterRange: quarterRange,
+    quarterLabel: quarterLabel, isQuarter: isQuarter, quarterRange: quarterRange, cleanRelease: cleanRelease,
     workingDaysBetween: workingDaysBetween, nudgeDue: nudgeDue, WORK_DAYS: WORK_DAYS,
     parseCsv: parseCsv, csvToItems: csvToItems
   };

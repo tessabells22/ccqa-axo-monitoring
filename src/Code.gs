@@ -11,7 +11,7 @@
 
 var SHEETS = { items: 'Items', notes: 'Notes', activity: 'Activity', lists: 'Lists', deleted: 'Deleted' };
 /** Bump when setup() must run again on an existing sheet (new columns or tabs). */
-var SCHEMA_VERSION = '4';
+var SCHEMA_VERSION = '5';
 var LIST_EXTRA_COLUMNS = ['Handler Slack ID', 'Email To', 'Email CC'];
 var TZ = Session.getScriptTimeZone() || 'Asia/Manila';
 
@@ -193,7 +193,7 @@ function formatItems_(sh) {
   var widths = { id: 70, itemType: 90, name: 520, workflowStep: 170, priority: 75, developer: 170, reportedBy: 170,
     releaseNotes: 260, quarter: 90, highPriority: 95, axoCategory: 100, system: 100, handler: 120, status: 130,
     completedOn: 120, commentDev: 420, commentSed: 300, updatedBy: 150, updatedAt: 150, lastImported: 150, inLatestImport: 110,
-    statusSince: 150, lastNudged: 110 };
+    statusSince: 150, lastNudged: 110, release: 80 };
   Object.keys(widths).forEach(function (k) { sh.setColumnWidth(col[k] + 1, widths[k]); });
 
   var body = function (k) { return sh.getRange(2, col[k] + 1, maxRows - 1, 1); };
@@ -313,7 +313,7 @@ function rowToItem_(row, today) {
   item.statusSince = fmtDate_(item.statusSince, "yyyy-MM-dd'T'HH:mm:ss");
   item.lastNudged = fmtDate_(item.lastNudged, 'yyyy-MM-dd');
   ['itemType', 'name', 'workflowStep', 'priority', 'developer', 'reportedBy', 'releaseNotes', 'quarter', 'axoCategory',
-   'system', 'handler', 'status', 'commentDev', 'commentSed', 'updatedBy'].forEach(function (k) {
+   'system', 'handler', 'status', 'commentDev', 'commentSed', 'updatedBy', 'release'].forEach(function (k) {
     item[k] = item[k] == null ? '' : String(item[k]);
   });
   // Working days (Tue-Sat) in the current status; null once the AXO is finished or has no start time.
@@ -449,6 +449,7 @@ function updateItem(id, patch, actorName) {
       var v = patch[k];
       if (k === 'highPriority') v = v === true;
       else if (k === 'completedOn') v = v ? parseDay_(v) : '';
+      else if (k === 'release') v = cleanRelease(v);
       else v = String(v == null ? '' : v).trim();
       if (k === 'status' && v && !STATUSES.some(function (s) { return s.name === v; })) throw new Error('Unknown status "' + v + '".');
       if (k === 'quarter' && v && !isQuarter(v)) throw new Error('Quarter must look like Q4 2026.');
@@ -485,6 +486,15 @@ function updateItem(id, patch, actorName) {
   });
 }
 
+/** The same change on several AXOs (used to set the release on many at once). */
+function updateItems(ids, patch, actorName) {
+  requireActor_(actorName);
+  ids = (ids || []).map(String).filter(Boolean);
+  if (!ids.length) throw new Error('Select at least one AXO.');
+  if (ids.length > 300) throw new Error('Change at most 300 AXOs at a time.');
+  return ids.map(function (id) { return updateItem(id, patch, actorName); });
+}
+
 function parseDay_(s) {
   var m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) throw new Error('Dates must look like 2026-10-15.');
@@ -508,7 +518,7 @@ function addItem(item, actorName) {
       highPriority: item.highPriority === true, axoCategory: item.axoCategory || deriveCategory(item.name),
       system: item.system || '', handler: item.handler || '', status: item.status || '',
       completedOn: '', commentDev: '', commentSed: '', updatedBy: who, updatedAt: now, lastImported: '', inLatestImport: false,
-      statusSince: now, lastNudged: ''
+      statusSince: now, lastNudged: '', release: cleanRelease(item.release)
     };
     var sh = sheet_(SHEETS.items);
     var at = firstFreeRow_(sh);

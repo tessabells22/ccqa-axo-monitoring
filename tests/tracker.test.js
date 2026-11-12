@@ -445,7 +445,7 @@ test('an existing sheet is upgraded on first load without losing data', () => {
 
   g.setNow('2026-11-06T09:00:00+08:00');
   const boot = g.ctx.getBootstrap();
-  assert.strictEqual(g.props.SCHEMA_VERSION, '4');
+  assert.strictEqual(g.props.SCHEMA_VERSION, '5');
   assert.ok(g.ss.getSheetByName('Deleted'), 'Deleted tab created');
   const newLists = lists.dump()[0];
   assert.ok(newLists.includes('Email To') && newLists.includes('Email CC'));
@@ -575,4 +575,21 @@ test('DEV/SED comment boxes are retired: text moves to notes once, kinds are gon
   g.props.SCHEMA_VERSION = '3';
   g.ctx.getBootstrap();
   assert.strictEqual(g.ctx.getItemDetail('20002').notes.length, 2, 'not copied twice');
+});
+
+test('release: per AXO, stored without the category prefix, settable in bulk', () => {
+  assert.strictEqual(M.cleanRelease(' ERPIS 5.4 '), '5.4');
+  assert.strictEqual(M.cleanRelease('SERPCAR 3.8 Release'), '3.8');
+  assert.strictEqual(M.cleanRelease('5.4'), '5.4');
+  const g = fresh();
+  g.ctx.importCsv(CSV, 'x');
+  assert.strictEqual(g.ctx.getBootstrap().items[0].release, '');
+  assert.strictEqual(g.ctx.updateItem('20002', { release: 'ERPIS 5.4' }, 'x').release, '5.4');
+  const res = g.ctx.updateItems(['20001', '20003'], { release: '3.8' }, 'Tessa - QA');
+  assert.deepStrictEqual(Array.from(res, (i) => i.release), ['3.8', '3.8']);
+  assert.throws(() => g.ctx.updateItems([], { release: '1' }, 'x'), /Select at least one/);
+  assert.throws(() => g.ctx.updateItems(['20001'], { release: '1' }, ''), /Pick your name/);
+  assert.ok(g.ss.getSheetByName('Activity').dump().some((r) => r[2] === '20001' && r[3] === 'Release' && r[5] === '3.8'));
+  assert.strictEqual(g.ctx.addItem({ id: '30001', name: 'ERPIS x', release: 'ERPIS 5.5' }, 'x').release, '5.5');
+  assert.strictEqual(g.ss.getSheetByName('Items').dump()[0].slice(-1)[0], 'Release', 'new column goes at the end');
 });

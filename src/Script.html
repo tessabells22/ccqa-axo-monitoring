@@ -234,7 +234,7 @@
   }
   function matches(i, f) {
     if (f.q) {
-      var hay = (i.id + ' ' + i.name + ' ' + i.developer + ' ' + i.reportedBy + ' ' + i.commentDev + ' ' + i.commentSed + ' ' + i.workflowStep).toLowerCase();
+      var hay = (i.id + ' ' + i.name + ' ' + i.developer + ' ' + i.reportedBy + ' ' + i.commentDev + ' ' + i.commentSed + ' ' + i.workflowStep + ' ' + releaseLabel(i)).toLowerCase();
       if (hay.indexOf(f.q) < 0) return false;
     }
     if (f.cat && i.axoCategory !== f.cat) return false;
@@ -357,7 +357,7 @@
 
   function rowHtml(i) {
     var n = S.noteCounts[i.id] || 0;
-    var sub = wfChip(i.workflowStep);
+    var sub = wfChip(i.workflowStep) + (i.release ? '<span class="rel-chip" title="Release">' + esc(releaseLabel(i)) + '</span>' : '');
     if (!i.inLatestImport && i.lastImported) sub += '<span class="gone">not in latest export</span>';
     var stOpts = '<option value="">Not started</option>' + S.statuses.map(function (s) {
       return '<option' + (s.name === i.status ? ' selected' : '') + '>' + esc(s.name) + '</option>';
@@ -549,7 +549,7 @@
   }
 
   function fillDrawerFields(item, skipField) {
-    ['d-status', 'd-handler', 'd-system', 'd-cat', 'd-quarter', 'd-done', 'd-hp'].forEach(function (id) {
+    ['d-status', 'd-handler', 'd-system', 'd-cat', 'd-quarter', 'd-release', 'd-done', 'd-hp'].forEach(function (id) {
       var el = $(id), f = el.dataset.field;
       if (f === skipField && document.activeElement === el) return;
       if (document.activeElement === el && el.tagName === 'TEXTAREA') return;
@@ -723,6 +723,36 @@
     });
   }
 
+  // ------------------------------------------------------------ set release on several AXOs
+  var relIds = [];
+  function openRelease() {
+    relIds = S.visible.filter(function (id) { return S.selected[id]; });
+    if (!relIds.length) return;
+    var same = {};
+    relIds.forEach(function (id) { same[S.byId[id].release || ''] = true; });
+    $('rel-title').textContent = 'Set release on ' + (relIds.length === 1 ? 'AXO ' + relIds[0] : relIds.length + ' AXOs');
+    $('rel-input').value = Object.keys(same).length === 1 ? Object.keys(same)[0] : '';
+    $('rel-err').hidden = true;
+    $('rel-go').disabled = false;
+    $('rel-dlg').showModal();
+    $('rel-input').focus();
+  }
+  function saveRelease() {
+    var v = $('rel-input').value.trim();
+    $('rel-go').disabled = true;
+    busy(1);
+    call('updateItems', relIds, { release: v }, me()).then(function (fresh) {
+      busy(-1);
+      fresh.forEach(function (f) { if (S.byId[f.id]) { Object.assign(S.byId[f.id], f); replaceRow(f.id, true); } });
+      $('rel-dlg').close();
+      toast((v ? 'Release set to ' + fresh[0].release : 'Release cleared') + ' on ' + fresh.length + ' AXO' + (fresh.length === 1 ? '' : 's'));
+    }).catch(function (e) {
+      busy(-1);
+      $('rel-go').disabled = false;
+      showErr('rel-err', e.message);
+    });
+  }
+
   // ------------------------------------------------------------ email (Outlook draft)
   // Follows the team's "Test File Submission Drafter" wording.
   var mail = { ids: [], edited: false };
@@ -730,14 +760,19 @@
   function firstName(name) { return String(name || '').replace(/\s*-\s*QA$/i, '').trim(); }
   function store(key, v) { try { if (v === undefined) return localStorage.getItem(key) || ''; localStorage.setItem(key, v); } catch (e) { return ''; } }
 
-  /** "SERPCAR 3.8" from a remembered value, or from a name like "… for 3.8 Release". */
+  /** "ERPIS 5.4": the AXO's category plus its release number. */
+  function releaseLabel(i) {
+    return i.release ? ((i.axoCategory ? i.axoCategory + ' ' : '') + i.release) : '';
+  }
+
+  /** The release(s) of the AXOs being emailed; falls back to "… for 3.8 Release" in a name. */
   function guessRelease(items) {
-    var cat = items[0].axoCategory || '';
-    var saved = store('ccqa.release.' + cat);
-    if (saved) return saved;
+    var seen = {}, out = [];
+    items.forEach(function (i) { var l = releaseLabel(i); if (l && !seen[l]) { seen[l] = true; out.push(l); } });
+    if (out.length) return out.join(' and ');
     for (var i = 0; i < items.length; i++) {
       var m = /\b(\d+\.\d+)\s+Release\b/i.exec(items[i].name);
-      if (m) return (cat ? cat + ' ' : '') + m[1];
+      if (m) return (items[i].axoCategory ? items[i].axoCategory + ' ' : '') + m[1];
     }
     return '';
   }
@@ -761,21 +796,23 @@
     var sign = 'Thanks, ' + (firstName(me()) || '');
     var relHtml = rel ? '<b>' + esc(rel) + '</b>' : '<b><span class="ph">[release]</span></b>';
     var relText = rel || '[release]';
-    var P = '<p style="margin:0 0 11pt">';
-    var h = [P + 'Hi ' + esc(greet) + ',</p>', P + 'Good day!</p>'];
+    // Shaped like Outlook's own messages: one div per line, a blank div between paragraphs,
+    // and no font set anywhere, so Outlook uses the person's default font.
+    var P = '<div>', BR = '<div><br></div>';
+    var h = [P + 'Hi ' + esc(greet) + ',</div>' + BR, P + 'Good day!</div>' + BR];
     var t = ['Hi ' + greet + ',', '', 'Good day!', ''];
     if (p.multi) {
-      h.push(P + 'In line with ' + esc(p.type) + ' Testing for ' + relHtml + ' Release, please review the attached test files for the following, tested in ' + esc(p.sys) + ' System:</p>');
-      h.push('<ul style="margin:0 0 11pt;padding-left:24px">' + p.labels.map(function (l) { return '<li style="margin:0 0 4pt"><b>' + esc(l) + '</b></li>'; }).join('') + '</ul>');
+      h.push(P + 'In line with ' + esc(p.type) + ' Testing for ' + relHtml + ' Release, please review the attached test files for the following, tested in ' + esc(p.sys) + ' System:</div>' + BR);
+      h.push('<ul>' + p.labels.map(function (l) { return '<li><b>' + esc(l) + '</b></li>'; }).join('') + '</ul>' + BR);
       t.push('In line with ' + p.type + ' Testing for ' + relText + ' Release, please review the attached test files for the following, tested in ' + p.sys + ' System:', '');
       p.labels.forEach(function (l) { t.push('- ' + l); });
     } else {
-      h.push(P + 'In line with ' + esc(p.type) + ' Testing for ' + relHtml + ' Release, please review the attached test file for <b>' + esc(p.labels[0]) + '</b> tested in ' + esc(p.sys) + ' System.</p>');
+      h.push(P + 'In line with ' + esc(p.type) + ' Testing for ' + relHtml + ' Release, please review the attached test file for <b>' + esc(p.labels[0]) + '</b> tested in ' + esc(p.sys) + ' System.</div>' + BR);
       t.push('In line with ' + p.type + ' Testing for ' + relText + ' Release, please review the attached test file for ' + p.labels[0] + ' tested in ' + p.sys + ' System.');
     }
     var c1 = 'Kindly advise if there are scenarios or cases missing, or if changes are necessary.';
     var c2 = 'Otherwise, kindly update the workflow step to the next one.';
-    h.push(P + c1 + '</p>', P + c2 + '</p>', P + esc(sign) + '</p>');
+    h.push(P + c1 + '</div>' + BR, P + c2 + '</div>' + BR, P + esc(sign) + '</div>');
     t.push('', c1, '', c2, '', sign);
     var nums = items.map(function (i) { return i.id; });
     return {
@@ -785,9 +822,7 @@
   }
 
   function textToHtml(text) {
-    return text.split(/\n{2,}/).map(function (para) {
-      return '<p style="margin:0 0 11pt">' + esc(para).replace(/\n/g, '<br>') + '</p>';
-    }).join('');
+    return text.split('\n').map(function (line) { return line.trim() ? '<div>' + esc(line) + '</div>' : '<div><br></div>'; }).join('');
   }
 
   /** Current message: the template, or the person's own text once they edit it. */
@@ -803,15 +838,27 @@
     return { to: list($('mail-to').value), cc: list($('mail-cc').value) };
   }
 
+  /**
+   * Outlook on the web: a "mailtouri" link (the form Outlook uses for mailto links) carries
+   * To, CC and subject. The plain to/subject parameters are kept as a fallback. The body
+   * is pasted in, because a link can only carry plain text and the bold would be lost.
+   */
+  function owaLink(withBody) {
+    var r = mailRecipients(), subject = $('mail-subject').value;
+    var addr = function (a) { return a.map(function (x) { return encodeURIComponent(x).replace(/%40/g, '@'); }).join(','); };
+    var mailto = 'mailto:' + addr(r.to) + '?' + (r.cc.length ? 'cc=' + addr(r.cc) + '&' : '') +
+      'subject=' + encodeURIComponent(subject) + (withBody ? '&body=' + encodeURIComponent(mailMessage().text) : '');
+    return 'https://outlook.office.com/mail/deeplink/compose?to=' + encodeURIComponent(r.to.join(';')) +
+      '&subject=' + encodeURIComponent(subject) + (withBody ? '&body=' + encodeURIComponent(mailMessage().text) : '') +
+      '&mailtouri=' + encodeURIComponent(mailto);
+  }
+
   function mailRefresh() {
     var d = mailMessage();
     if (!mail.edited) $('mail-body').value = d.text;
     $('mail-preview').innerHTML = d.html;
     $('mail-preview').hidden = mail.edited;
     var r = mailRecipients();
-    // Outlook on the web only takes To, subject and plain text from a link; it ignores CC.
-    $('mail-web').href = 'https://outlook.office.com/mail/deeplink/compose?to=' + encodeURIComponent(r.to.join(';')) +
-      '&subject=' + encodeURIComponent($('mail-subject').value) + '&body=' + encodeURIComponent(d.text);
     var hint = $('mail-hint');
     hint.className = 'rp-to';
     if (!r.to.length) {
@@ -819,10 +866,10 @@
       hint.textContent = 'No recipients yet. Type them here, or set the defaults once in the Lists tab of the Google Sheet (Email To and Email CC columns).';
     } else if (!$('mail-release').value.trim()) {
       hint.className = 'rp-to warn';
-      hint.textContent = 'Add the release (for example ERPIS 5.4). The tracker remembers it for next time.';
+      hint.textContent = 'No release on ' + (mail.ids.length > 1 ? 'these AXOs' : 'this AXO') + ' yet. Type it here, or set it on the AXO (Release field) so it fills in next time.';
     } else {
-      hint.innerHTML = '<b>Open in Outlook</b> downloads the draft; open the file and Outlook shows it as a new email with To, CC and bold text filled in. ' +
-        '<b>Outlook on the web</b> can\'t take CC or bold: add ' + (r.cc.length ? esc(r.cc.join('; ')) : 'CC') + ' there yourself.';
+      hint.innerHTML = '<b>Open in Outlook on the web</b> opens a new email with To, CC and subject, and copies the message. ' +
+        'Click in the message area and press <b>Ctrl+V</b> (<b>⌘V</b> on a Mac) to paste it with its bold text, in your own default font.';
     }
   }
 
@@ -851,7 +898,7 @@
   }
   function emlFile() {
     var r = mailRecipients(), d = mailMessage(), subject = $('mail-subject').value;
-    var html = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#000">' + d.html + '</body></html>';
+    var html = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>' + d.html + '</body></html>';
     var wrap = function (s) { return s.replace(/.{1,76}/g, '$&\r\n'); };
     var lines = [
       'To: ' + r.to.join(', '),
@@ -867,23 +914,51 @@
     return { text: lines.join('\r\n'), name: subject.replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 120) + '.eml' };
   }
 
-  function copyMessage() {
+  /** Copies the message with its bold text. Resolves to 'rich', or 'plain' if only text could be copied. */
+  function copyMail() {
     var d = mailMessage();
-    var done = function () { toast('Message copied with its formatting. Paste it into the Outlook email.'); };
     var plain = function () {
-      var t = $('mail-body'); var was = t.hidden; t.hidden = false; t.value = d.text; t.select();
-      document.execCommand('copy'); t.hidden = was; toast('Message copied as plain text.');
+      var t = $('mail-body'), was = t.hidden;
+      t.hidden = false; t.value = d.text; t.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) {}
+      t.hidden = was;
+      return ok ? 'plain' : 'none';
     };
     try {
       if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
-        navigator.clipboard.write([new ClipboardItem({
-          'text/html': new Blob(['<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt">' + d.html + '</div>'], { type: 'text/html' }),
+        return navigator.clipboard.write([new ClipboardItem({
+          'text/html': new Blob([d.html], { type: 'text/html' }),
           'text/plain': new Blob([d.text], { type: 'text/plain' })
-        })]).then(done, plain);
-        return;
+        })]).then(function () { return 'rich'; }, plain);
       }
     } catch (e) {}
-    plain();
+    return Promise.resolve(plain());
+  }
+
+  function copyMessage() {
+    copyMail().then(function (how) {
+      toast(how === 'rich' ? 'Message copied with its bold text. Paste it into the email.' :
+        how === 'plain' ? 'Message copied as plain text (this browser blocked the formatted copy).' : 'Could not copy. Use Edit the text and copy it from there.', how === 'none');
+    });
+  }
+
+  function openOwa() {
+    copyMail().then(function (how) {
+      // If the formatted copy failed, put the text in the link so the email isn't empty.
+      var url = owaLink(how !== 'rich');
+      // No 'noopener' feature here: with it, window.open always returns null and a blocked
+      // tab can't be told apart from an open one.
+      var win = window.open(url, '_blank');
+      if (win) { try { win.opener = null; } catch (e) {} }
+      if (!win) {
+        $('mail-hint').innerHTML = 'Your browser blocked the new tab. <a href="' + esc(url) + '" target="_blank" rel="noopener">Open Outlook on the web</a>' +
+          (how === 'rich' ? ', then paste the message (Ctrl+V).' : '.');
+        return;
+      }
+      toast(how === 'rich' ? 'In Outlook, click in the message area and press Ctrl+V to paste the message.' :
+        'Outlook opened with the message as plain text (this browser blocked the formatted copy).', how !== 'rich');
+    });
   }
 
   // ------------------------------------------------------------ report
@@ -965,11 +1040,11 @@
     $('d-email').addEventListener('click', function () { if (S.openId) openMail([S.openId]); });
     $('sel-email').addEventListener('click', function () { openMail(S.visible.filter(function (id) { return S.selected[id]; })); });
     ['mail-to', 'mail-cc', 'mail-subject'].forEach(function (id) { $(id).addEventListener('input', mailRefresh); });
-    $('mail-release').addEventListener('input', function () {
-      var item = S.byId[mail.ids[0]];
-      if (item) store('ccqa.release.' + (item.axoCategory || ''), $('mail-release').value.trim());
-      mailRefresh();
-    });
+    $('mail-release').addEventListener('input', mailRefresh);
+    $('mail-web').addEventListener('click', openOwa);
+    $('sel-release').addEventListener('click', function () { withMe(openRelease); });
+    $('rel-cancel').addEventListener('click', function () { $('rel-dlg').close(); });
+    $('rel-form').addEventListener('submit', function (e) { e.preventDefault(); saveRelease(); });
     $('mail-greeting').addEventListener('input', function () { store('ccqa.greeting', $('mail-greeting').value.trim()); mailRefresh(); });
     $('mail-body').addEventListener('input', function () { mail.edited = true; mailRefresh(); });
     $('mail-edit').addEventListener('click', function () {
@@ -985,7 +1060,7 @@
       a.download = f.name;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(function () { URL.revokeObjectURL(a.href); }, 60000);
-      toast('Draft downloaded. Open ' + f.name + ' and Outlook shows it as a new email. Attach the test file, then Send.');
+      toast('Downloaded ' + f.name + '. Opened in the Outlook desktop app, it becomes a new email with To, CC and bold text.');
     });
 
     // Report
@@ -1127,7 +1202,7 @@
     });
 
     // Drawer fields save as soon as they change.
-    ['d-status', 'd-handler', 'd-system', 'd-cat', 'd-quarter', 'd-done', 'd-hp'].forEach(function (id) {
+    ['d-status', 'd-handler', 'd-system', 'd-cat', 'd-quarter', 'd-release', 'd-done', 'd-hp'].forEach(function (id) {
       $(id).addEventListener('change', function (e) { drawerSave(e.target); });
     });
     function drawerSave(el) {

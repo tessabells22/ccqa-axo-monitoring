@@ -78,7 +78,7 @@ http.createServer((req, res) => {
       const fn = req.url.slice(5);
       let out;
       try {
-        if (!/^(getBootstrap|updateItem|addItem|importCsv|getItemDetail|addNote|setReviewPoints|deleteItems|buildReport|reportPdf)$/.test(fn)) throw new Error('Not exposed: ' + fn);
+        if (!/^(getBootstrap|updateItem|addItem|importCsv|getItemDetail|addNote|setReviewPoints|deleteItems|buildReport|reportPdf|updateItems)$/.test(fn)) throw new Error('Not exposed: ' + fn);
         out = { result: JSON.parse(JSON.stringify(gas.ctx[fn](...JSON.parse(body)))) };
       } catch (e) { out = { error: e.message }; }
       res.writeHead(200, { 'Content-Type': 'application/json' });

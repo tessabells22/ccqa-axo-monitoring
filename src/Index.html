@@ -83,6 +83,7 @@
         <button class="btn btn-sm btn-quiet" id="sel-all" type="button"></button>
         <span class="grow"></span>
         <button class="btn btn-sm" id="sel-clear" type="button">Clear selection</button>
+        <button class="btn btn-sm" id="sel-release" type="button">Set release</button>
         <button class="btn btn-sm" id="sel-email" type="button">Email test files</button>
         <button class="btn btn-sm btn-danger" id="sel-delete" type="button">Delete selected</button>
       </div>
@@ -131,6 +132,7 @@
           <label>System<select id="d-system" data-field="system"></select></label>
           <label>AXO Category<select id="d-cat" data-field="axoCategory"></select></label>
           <label>Quarter<select id="d-quarter" data-field="quarter"></select></label>
+          <label>Release<input id="d-release" data-field="release" placeholder="e.g. 5.4" spellcheck="false" autocomplete="off"></label>
           <label>Date of Completion<input type="date" id="d-done" data-field="completedOn"></label>
           <label>High Priority<select id="d-hp" data-field="highPriority"><option value="false">No</option><option value="true">Yes</option></select></label>
         </div>
@@ -243,6 +245,23 @@
     </form>
   </dialog>
 
+  <!-- Set release on several AXOs -->
+  <dialog id="rel-dlg">
+    <form id="rel-form">
+      <div class="dlg-head"><h2 id="rel-title">Set release</h2>
+        <p>Type the release number only, for example 5.4. ERPIS or SERPCAR is added from each AXO's category when the email is drafted.</p></div>
+      <div class="dlg-body">
+        <label class="dlg-field">Release<input id="rel-input" placeholder="5.4" spellcheck="false" autocomplete="off"></label>
+        <p class="rp-to">Leave it empty to clear the release on these AXOs.</p>
+        <div class="dlg-err" id="rel-err" hidden></div>
+      </div>
+      <div class="dlg-foot">
+        <button class="btn" type="button" id="rel-cancel">Cancel</button>
+        <button class="btn btn-primary" type="submit" id="rel-go">Save</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- Delete -->
   <dialog id="del-dlg">
     <form id="del-form">
@@ -264,12 +283,12 @@
   <!-- Email -->
   <dialog id="mail-dlg" class="dlg-wide">
     <div class="dlg-head"><h2 id="mail-title">Email test file for review</h2>
-      <p>Drafts the test file submission email. Nothing is sent from here: you check it in Outlook, attach the test file and click Send, from your own work email.</p></div>
+      <p>Drafts the test file submission email. Nothing is sent from here: Outlook opens with it, you attach the test file and click Send, from your own work email.</p></div>
     <div class="dlg-body">
       <div class="mail-grid">
         <label class="dlg-field">To<input id="mail-to" spellcheck="false"></label>
         <label class="dlg-field">CC<input id="mail-cc" spellcheck="false"></label>
-        <label class="dlg-field">Release<input id="mail-release" placeholder="ERPIS 5.4" spellcheck="false"></label>
+        <label class="dlg-field">Release<input id="mail-release" placeholder="Set it on the AXO, e.g. 5.4" spellcheck="false"></label>
         <label class="dlg-field">Greeting<input id="mail-greeting" placeholder="Team"></label>
       </div>
       <label class="dlg-field">Subject<input id="mail-subject"></label>
@@ -282,9 +301,9 @@
     </div>
     <div class="dlg-foot">
       <button class="btn" type="button" id="mail-cancel">Close</button>
+      <button class="btn btn-quiet" type="button" id="mail-eml" title="For the Outlook desktop app">Download .eml</button>
       <button class="btn" type="button" id="mail-copy">Copy message</button>
-      <a class="btn" id="mail-web" target="_blank" rel="noopener">Outlook on the web</a>
-      <button class="btn btn-primary" type="button" id="mail-eml">Open in Outlook</button>
+      <button class="btn btn-primary" type="button" id="mail-web">Open in Outlook on the web</button>
     </div>
   </dialog>
 
