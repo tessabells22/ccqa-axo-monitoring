@@ -598,6 +598,8 @@
     var st = $('d-status');
     st.setAttribute('style', statusStyle(item.status) + (item.status ? ';font-weight:700' : ''));
     $('d-rp').hidden = item.status !== 'Review Points';
+    // The reviewer's reply makes sense once the AXO has been sent for review.
+    $('d-reply').hidden = !(item.reviewer || /^(For Review|Review Points|For Upload)$/.test(item.status || ''));
     var dl = $('d-days');
     dl.className = 'dis-line' + (isStuck(item) ? ' warn' : '');
     dl.innerHTML = item.daysInStatus == null ? '' : '<b>' + item.daysInStatus + ' working day' + (item.daysInStatus === 1 ? '' : 's') + '</b> in ' +
@@ -1047,6 +1049,113 @@
     });
   }
 
+  // ------------------------------------------------------------ reviewer's reply (review done)
+  // Sent as a reply on the handler's own email, so it stays in that thread with everyone on it.
+  // A link can't open a reply to a specific message (that needs the message's id, which only
+  // Outlook has), so the reviewer opens the email, clicks Reply all and pastes this message.
+  var reply = { ids: [], edited: false };
+
+  /** "Ley - QA" -> "Ley". */
+  function firstName(n) { return String(n || '').split(/\s+-\s+/)[0].trim().split(/\s+/)[0] || ''; }
+
+  function joinNames(names) {
+    return names.length < 2 ? (names[0] || '') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+  }
+
+  /** SharePoint folder from the AXO type: Bug or User story. System and Release are picked by hand. */
+  function replyFolder(items) {
+    var t = {};
+    items.forEach(function (i) { t[i.itemType] = true; });
+    var k = Object.keys(t);
+    return k.length === 1 && k[0] === 'User Story' ? 'User story' : k.length === 1 && k[0] === 'Bug' ? 'Bug' : '';
+  }
+
+  function replyDraft(items, result, folder, hi, name) {
+    var multi = items.length > 1;
+    var greet = hi.trim() || '[name]', sign = name.trim() || '[your name]';
+    var what = multi ? 'The test files have been reviewed' : 'The test file has been reviewed';
+    var how = result === 'updates' ? ' with a few updates needed, as discussed via Slack.'
+      : (multi ? ' and look good on my end.' : ' and looks good on my end.');
+    var lead = result === 'updates' ? 'Please update accordingly and then upload ' : 'You may now upload ';
+    var tail = (multi ? 'them' : 'it') + ' in our SharePoint for ';
+    var f = folder || '[System, Release, Bug or User story]';
+    var fHtml = folder ? '<b>' + esc(folder) + '</b>' : '<b><span class="ph">' + esc(f) + '</span></b>';
+    var hiHtml = hi.trim() ? esc(greet) : '<span class="ph">[name]</span>';
+    var signHtml = name.trim() ? esc(sign) : '<span class="ph">[your name]</span>';
+    var P = '<div>', BR = '<div><br></div>';
+    return {
+      html: P + 'Hi ' + hiHtml + '!</div>' + BR +
+        P + esc(what + how) + ' ' + esc(lead + tail) + fHtml + '.</div>' + BR +
+        P + 'Greetings,</div>' + P + signHtml + '</div>',
+      text: ['Hi ' + greet + '!', '', what + how + ' ' + lead + tail + f + '.', '', 'Greetings,', sign].join('\n')
+    };
+  }
+
+  function replyMessage() {
+    var items = reply.ids.map(function (id) { return S.byId[id]; }).filter(Boolean);
+    var d = replyDraft(items, $('rr-result').value, $('rr-type').value, $('rr-hi').value, $('rr-name').value);
+    if (reply.edited) { d.text = $('rr-body').value; d.html = textToHtml(d.text); }
+    return d;
+  }
+
+  function replyRefresh() {
+    var d = replyMessage();
+    if (!reply.edited) $('rr-body').value = d.text;
+    $('rr-preview').innerHTML = d.html;
+    $('rr-preview').hidden = reply.edited;
+  }
+
+  function openReply(ids) {
+    var items = ids.map(function (id) { return S.byId[id]; }).filter(Boolean);
+    if (!items.length) return;
+    reply.ids = items.map(function (i) { return i.id; });
+    reply.edited = false;
+    var multi = items.length > 1;
+    $('rr-title').textContent = multi ? 'Reply: ' + items.length + ' test files reviewed' : 'Reply: test file reviewed';
+    $('rr-result').value = items.some(function (i) { return i.status === 'Review Points'; }) ? 'updates' : 'good';
+    $('rr-type').value = replyFolder(items);
+    var handlers = [];
+    items.forEach(function (i) { var n = firstName(i.handler); if (n && handlers.indexOf(n) < 0) handlers.push(n); });
+    $('rr-hi').value = joinNames(handlers);
+    var reviewers = items.map(function (i) { return i.reviewer; }).filter(Boolean);
+    $('rr-name').value = store('ccqa.signName') || firstName(me() || reviewers[0]);
+    // The handler's email has the subject the tracker drafted: "AXO 101 - Test File for Review".
+    $('rr-find').textContent = 'AXO ' + reply.ids[0];
+    $('rr-subject').innerHTML = ' <span class="muted">(subject "AXO ' + esc(reply.ids.join(', ')) + ' - Test File' + (multi ? 's' : '') + ' for Review")</span>';
+    $('rr-body').hidden = true;
+    $('rr-edit').hidden = false;
+    replyRefresh();
+    $('rr-dlg').showModal();
+  }
+
+  /** Copies the reply with its bold text, like copyMail(). */
+  function copyReply() {
+    var d = replyMessage();
+    var plain = function () {
+      var t = $('rr-body'), was = t.hidden;
+      t.hidden = false; t.value = d.text; t.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) {}
+      t.hidden = was;
+      return ok ? 'plain' : 'none';
+    };
+    try {
+      if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+        return navigator.clipboard.write([new ClipboardItem({
+          'text/html': new Blob([d.html], { type: 'text/html' }),
+          'text/plain': new Blob([d.text], { type: 'text/plain' })
+        })]).then(function () { return 'rich'; }, plain);
+      }
+    } catch (e) {}
+    return Promise.resolve(plain());
+  }
+
+  function replyToast(how, opened) {
+    if (how === 'none') { toast('Could not copy. Use Edit the text and copy it from there.', true); return; }
+    toast((how === 'rich' ? 'Reply copied.' : 'Reply copied as plain text.') +
+      (opened ? ' Search Outlook for ' + $('rr-find').textContent + ', open the email, click Reply all and paste.' : ' Open the handler\'s email, click Reply all and paste.'));
+  }
+
   // ------------------------------------------------------------ report
   function qRange(label) {
     var m = /^Q([1-4]) (\d{4})$/.exec(label || '');
@@ -1143,6 +1252,32 @@
     $('mail-cancel').addEventListener('click', function () { $('mail-dlg').close(); });
     $('mail-auto').addEventListener('change', function () { store('ccqa.mailAuto', $('mail-auto').checked ? '1' : '0'); mailRefresh(); });
     $('mail-copy').addEventListener('click', copyMessage);
+
+    // Reviewer's reply
+    $('d-reply').addEventListener('click', function () { if (S.openId) openReply([S.openId]); });
+    $('sel-reply').addEventListener('click', function () { openReply(S.visible.filter(function (id) { return S.selected[id]; })); });
+    ['rr-result', 'rr-type'].forEach(function (id) { $(id).addEventListener('change', replyRefresh); });
+    $('rr-hi').addEventListener('input', replyRefresh);
+    $('rr-name').addEventListener('input', function () { store('ccqa.signName', $('rr-name').value.trim()); replyRefresh(); });
+    $('rr-body').addEventListener('input', function () { reply.edited = true; replyRefresh(); });
+    $('rr-edit').addEventListener('click', function () {
+      $('rr-body').hidden = false; $('rr-edit').hidden = true; $('rr-preview').hidden = true;
+      $('rr-body').focus();
+    });
+    $('rr-cancel').addEventListener('click', function () { $('rr-dlg').close(); });
+    $('rr-copy').addEventListener('click', function () { copyReply().then(function (how) { replyToast(how, false); }); });
+    $('rr-copy-find').addEventListener('click', function () {
+      var t = $('rr-find').textContent;
+      (navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(t) : Promise.reject())
+        .then(function () { toast('Copied "' + t + '". Paste it into the Outlook search box.'); }, function () { toast('Search Outlook for ' + t + '.'); });
+    });
+    $('rr-web').addEventListener('click', function () {
+      copyReply().then(function (how) {
+        var win = window.open('https://outlook.office.com/mail/', '_blank');
+        if (win) { try { win.opener = null; } catch (e) {} }
+        replyToast(how, !!win);
+      });
+    });
     $('mail-eml').addEventListener('click', function () {
       var f = emlFile();
       var a = document.createElement('a');
