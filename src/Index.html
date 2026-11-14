@@ -87,6 +87,7 @@
         <button class="btn btn-sm" id="sel-status" type="button">Set status</button>
         <button class="btn btn-sm" id="sel-release" type="button">Set release</button>
         <button class="btn btn-sm" id="sel-email" type="button">Email test files</button>
+        <button class="btn btn-sm" id="sel-reply" type="button">Reply: reviewed</button>
         <button class="btn btn-sm btn-danger" id="sel-delete" type="button">Delete selected</button>
       </div>
       <div class="table-scroll">
@@ -121,6 +122,7 @@
     <div class="d-head">
       <div class="d-top"><span class="mono" id="d-id"></span><span id="d-type"></span><span class="prio" id="d-prio"></span>
         <span class="d-actions"><button class="btn btn-sm" id="d-email" type="button">Email</button>
+          <button class="btn btn-sm" id="d-reply" type="button" hidden title="Reply to the handler's email: review done">Reply: reviewed</button>
           <button class="btn btn-sm" id="d-close" type="button">Close</button></span></div>
       <h2 id="d-title"></h2>
       <div class="people" id="d-people"></div>
@@ -324,6 +326,39 @@
       <button class="btn btn-quiet" type="button" id="mail-eml" title="For the Outlook desktop app">Download .eml</button>
       <button class="btn" type="button" id="mail-copy">Copy message</button>
       <button class="btn btn-primary" type="button" id="mail-web">Open in Outlook on the web</button>
+    </div>
+  </dialog>
+
+  <!-- Reviewer's reply to the handler's email -->
+  <dialog id="rr-dlg" class="dlg-wide">
+    <div class="dlg-head"><h2 id="rr-title">Reply: test file reviewed</h2>
+      <p>Your reply to the handler's test file email, sent from your own Outlook. Nothing is sent from here.</p></div>
+    <div class="dlg-body">
+      <div class="mail-grid">
+        <label class="dlg-field">Review result<select id="rr-result">
+          <option value="good">Looks good</option>
+          <option value="updates">Updates needed (discussed via Slack)</option></select></label>
+        <label class="dlg-field">Upload to SharePoint for<select id="rr-type">
+          <option value="">Pick one</option>
+          <option>System</option><option>Release</option><option>Bug</option><option>User story</option></select></label>
+        <label class="dlg-field">Hi<input id="rr-hi" placeholder="Handler's name"></label>
+        <label class="dlg-field">Your name<input id="rr-name" placeholder="Signed as"></label>
+      </div>
+      <div class="dlg-field">Message
+        <div class="mail-preview" id="rr-preview"></div>
+        <textarea id="rr-body" hidden aria-label="Message text"></textarea>
+        <button type="button" class="linkish" id="rr-edit">Edit the text</button>
+      </div>
+      <ol class="rr-steps">
+        <li>In Outlook, search for <b class="mono" id="rr-find"></b> <button type="button" class="linkish" id="rr-copy-find">Copy</button> and open the handler's email<span id="rr-subject"></span>.</li>
+        <li>Click <b>Reply all</b>, so everyone on the original email gets it.</li>
+        <li>Click in the message area and press <b>Ctrl+V</b> (<b>⌘V</b> on a Mac), then Send.</li>
+      </ol>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn" type="button" id="rr-cancel">Close</button>
+      <button class="btn" type="button" id="rr-copy">Copy message</button>
+      <button class="btn btn-primary" type="button" id="rr-web">Copy and open Outlook on the web</button>
     </div>
   </dialog>
 
