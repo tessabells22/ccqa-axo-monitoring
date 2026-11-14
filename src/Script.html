@@ -1058,7 +1058,7 @@
   // Sent as a reply on the handler's own email, so it stays in that thread with everyone on it.
   // A link can't open a reply to a specific message (that needs the message's id, which only
   // Outlook has), so the reviewer opens the email, clicks Reply all and pastes this message.
-  var reply = { ids: [], edited: false };
+  var reply = { ids: [], edited: false, folder: '' };
 
   /** "Ley - QA" -> "Ley". */
   function firstName(n) { return String(n || '').split(/\s+-\s+/)[0].trim().split(/\s+/)[0] || ''; }
@@ -1067,12 +1067,16 @@
     return names.length < 2 ? (names[0] || '') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
   }
 
-  /** SharePoint folder from the AXO type: Bug or User story. System and Release are picked by hand. */
+  /** SharePoint folder for one AXO, from its details: the item type (Bug or User Story). */
+  function axoFolder(i) {
+    return i.itemType === 'User Story' ? 'User story' : i.itemType === 'Bug' ? 'Bug' : '';
+  }
+
+  /** Folder(s) for the AXOs being replied about: "Bug", or "Bug and User story" for a mix. */
   function replyFolder(items) {
-    var t = {};
-    items.forEach(function (i) { t[i.itemType] = true; });
-    var k = Object.keys(t);
-    return k.length === 1 && k[0] === 'User Story' ? 'User story' : k.length === 1 && k[0] === 'Bug' ? 'Bug' : '';
+    var out = [];
+    items.forEach(function (i) { var f = axoFolder(i); if (f && out.indexOf(f) < 0) out.push(f); });
+    return joinNames(out);
   }
 
   function replyDraft(items, result, folder, hi, name) {
@@ -1100,7 +1104,7 @@
 
   function replyMessage() {
     var items = reply.ids.map(function (id) { return S.byId[id]; }).filter(Boolean);
-    var d = replyDraft(items, $('rr-result').value, $('rr-type').value, $('rr-hi').value, $('rr-name').value);
+    var d = replyDraft(items, $('rr-result').value, reply.folder, $('rr-hi').value, $('rr-name').value);
     if (reply.edited) { d.text = $('rr-body').value; d.html = textToHtml(d.text); }
     return d;
   }
@@ -1121,7 +1125,9 @@
     $('rr-title').textContent = multi ? 'Reply: ' + items.length + ' test files reviewed' : 'Reply: test file reviewed';
     if (items.some(function (i) { return i.status !== 'Review Points'; })) { toast('Reply: reviewed is only for AXOs in Review Points.', true); return; }
     $('rr-result').value = 'good';
-    $('rr-type').value = replyFolder(items);
+    reply.folder = replyFolder(items);
+    $('rr-folder').innerHTML = reply.folder ? '<b>' + esc(reply.folder) + '</b> <span class="muted">from the AXO\'s item type</span>'
+      : '<span class="muted">Not set on the AXO. Type it in with Edit the text.</span>';
     var handlers = [];
     items.forEach(function (i) { var n = firstName(i.handler); if (n && handlers.indexOf(n) < 0) handlers.push(n); });
     $('rr-hi').value = joinNames(handlers);
@@ -1264,7 +1270,7 @@
     // Reviewer's reply
     $('d-reply').addEventListener('click', function () { if (S.openId) openReply([S.openId]); });
     $('sel-reply').addEventListener('click', function () { openReply(S.visible.filter(function (id) { return S.selected[id]; })); });
-    ['rr-result', 'rr-type'].forEach(function (id) { $(id).addEventListener('change', replyRefresh); });
+    $('rr-result').addEventListener('change', replyRefresh);
     $('rr-hi').addEventListener('input', replyRefresh);
     $('rr-name').addEventListener('input', function () { store('ccqa.signName', $('rr-name').value.trim()); replyRefresh(); });
     $('rr-body').addEventListener('input', function () { reply.edited = true; replyRefresh(); });
