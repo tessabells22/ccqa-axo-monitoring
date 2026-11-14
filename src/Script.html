@@ -464,6 +464,9 @@
     var n = Object.keys(S.selected).length, total = S.visible.length;
     $('selbar').hidden = !n;
     $('sel-count').textContent = n + ' selected';
+    var allRp = n > 0 && Object.keys(S.selected).every(function (id) { return S.byId[id] && S.byId[id].status === 'Review Points'; });
+    $('sel-reply').disabled = !allRp;
+    $('sel-reply').title = allRp ? 'Reply to the handler\'s email: review done' : 'Only for AXOs in Review Points';
     $('sel-all').hidden = n >= total;
     $('sel-all').textContent = 'Select all ' + total + ' in this view';
     $('sel-delete').textContent = 'Delete ' + (n === S.items.length && n > 1 ? 'ALL ' + n : n === 1 ? '1 AXO' : n + ' AXOs');
@@ -598,8 +601,10 @@
     var st = $('d-status');
     st.setAttribute('style', statusStyle(item.status) + (item.status ? ';font-weight:700' : ''));
     $('d-rp').hidden = item.status !== 'Review Points';
-    // The reviewer's reply makes sense once the AXO has been sent for review.
-    $('d-reply').hidden = !(item.reviewer || /^(For Review|Review Points|For Upload)$/.test(item.status || ''));
+    // The reviewer's reply is only for AXOs in Review Points.
+    var canReply = item.status === 'Review Points';
+    $('d-reply').disabled = !canReply;
+    $('d-reply').title = canReply ? 'Reply to the handler\'s email: review done' : 'Set the status to Review Points to reply';
     var dl = $('d-days');
     dl.className = 'dis-line' + (isStuck(item) ? ' warn' : '');
     dl.innerHTML = item.daysInStatus == null ? '' : '<b>' + item.daysInStatus + ' working day' + (item.daysInStatus === 1 ? '' : 's') + '</b> in ' +
@@ -1082,12 +1087,14 @@
     var fHtml = folder ? '<b>' + esc(folder) + '</b>' : '<b><span class="ph">' + esc(f) + '</span></b>';
     var hiHtml = hi.trim() ? esc(greet) : '<span class="ph">[name]</span>';
     var signHtml = name.trim() ? esc(sign) : '<span class="ph">[your name]</span>';
-    var P = '<div>', BR = '<div><br></div>';
+    var P = '<div>', BR = '<div><br></div>', thanks = 'Thank you and God bless!';
     return {
-      html: P + 'Hi ' + hiHtml + '!</div>' + BR +
-        P + esc(what + how) + ' ' + esc(lead + tail) + fHtml + '.</div>' + BR +
-        P + 'Greetings,</div>' + P + signHtml + '</div>',
-      text: ['Hi ' + greet + '!', '', what + how + ' ' + lead + tail + f + '.', '', 'Greetings,', sign].join('\n')
+      html: P + 'Hi ' + hiHtml + ',</div>' +
+        P + esc(what + how) + '</div>' +
+        P + esc(lead + tail) + fHtml + '.</div>' + BR +
+        P + thanks + '</div>' + BR +
+        P + 'Best regards,</div>' + P + signHtml + '</div>',
+      text: ['Hi ' + greet + ',', what + how, lead + tail + f + '.', '', thanks, '', 'Best regards,', sign].join('\n')
     };
   }
 
@@ -1112,7 +1119,8 @@
     reply.edited = false;
     var multi = items.length > 1;
     $('rr-title').textContent = multi ? 'Reply: ' + items.length + ' test files reviewed' : 'Reply: test file reviewed';
-    $('rr-result').value = items.some(function (i) { return i.status === 'Review Points'; }) ? 'updates' : 'good';
+    if (items.some(function (i) { return i.status !== 'Review Points'; })) { toast('Reply: reviewed is only for AXOs in Review Points.', true); return; }
+    $('rr-result').value = 'good';
     $('rr-type').value = replyFolder(items);
     var handlers = [];
     items.forEach(function (i) { var n = firstName(i.handler); if (n && handlers.indexOf(n) < 0) handlers.push(n); });
