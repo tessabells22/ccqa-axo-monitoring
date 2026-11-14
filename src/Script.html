@@ -1067,9 +1067,10 @@
     return names.length < 2 ? (names[0] || '') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
   }
 
-  /** SharePoint folder for one AXO, from its details: the item type (Bug or User Story). */
+  /** SharePoint folder for one AXO, from its details: "ERPIS 6.0 Bug AXO testing" (category, release, item type). */
   function axoFolder(i) {
-    return i.itemType === 'User Story' ? 'User story' : i.itemType === 'Bug' ? 'Bug' : '';
+    var type = i.itemType === 'Bug' || i.itemType === 'User Story' ? i.itemType + ' ' : '';
+    return (guessRelease([i]) || '[release]') + ' ' + type + 'AXO testing';
   }
 
   /** Folder(s) for the AXOs being replied about: "Bug", or "Bug and User story" for a mix. */
@@ -1087,8 +1088,8 @@
       : (multi ? ' and look good on my end.' : ' and looks good on my end.');
     var lead = result === 'updates' ? 'Please update accordingly and then upload ' : 'You may now upload ';
     var tail = (multi ? 'them' : 'it') + ' in our SharePoint for ';
-    var f = folder || '[System, Release, Bug or User story]';
-    var fHtml = folder ? '<b>' + esc(folder) + '</b>' : '<b><span class="ph">' + esc(f) + '</span></b>';
+    var f = folder || '[folder]';
+    var fHtml = '<b>' + esc(f).replace(/\[(release|folder)\]/g, '<span class="ph">[$1]</span>') + '</b>';
     var hiHtml = hi.trim() ? esc(greet) : '<span class="ph">[name]</span>';
     var signHtml = name.trim() ? esc(sign) : '<span class="ph">[your name]</span>';
     var P = '<div>', BR = '<div><br></div>', thanks = 'Thank you and God bless!';
@@ -1126,8 +1127,8 @@
     if (items.some(function (i) { return i.status !== 'Review Points'; })) { toast('Reply: reviewed is only for AXOs in Review Points.', true); return; }
     $('rr-result').value = 'good';
     reply.folder = replyFolder(items);
-    $('rr-folder').innerHTML = reply.folder ? '<b>' + esc(reply.folder) + '</b> <span class="muted">from the AXO\'s item type</span>'
-      : '<span class="muted">Not set on the AXO. Type it in with Edit the text.</span>';
+    $('rr-folder').innerHTML = '<b>' + esc(reply.folder) + '</b> <span class="muted">' +
+      (/\[release\]/.test(reply.folder) ? 'No release on the AXO yet. Set its Release field, or use Edit the text.' : 'from the AXO\'s category, release and type') + '</span>';
     var handlers = [];
     items.forEach(function (i) { var n = firstName(i.handler); if (n && handlers.indexOf(n) < 0) handlers.push(n); });
     $('rr-hi').value = joinNames(handlers);
