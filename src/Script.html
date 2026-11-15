@@ -948,7 +948,7 @@
       hint.textContent = 'No recipients yet. Type them here, or set the defaults once in the Lists tab of the Google Sheet (Email To and Email CC columns).';
     } else if (!$('mail-release').value.trim()) {
       hint.className = 'rp-to warn';
-      hint.textContent = 'No release on ' + (mail.ids.length > 1 ? 'these AXOs' : 'this AXO') + ' yet. Type it here, or set it on the AXO (Release field) so it fills in next time.';
+      hint.textContent = 'No release on ' + (mail.ids.length > 1 ? 'these AXOs' : 'this AXO') + ' yet. Pick it above; it\'s saved on the AXO for next time.';
     } else if ($('mail-auto').checked) {
       hint.innerHTML = '<b>Open in Outlook on the web</b> opens a new email with To, CC, subject and the message already filled in. ' +
         'The message comes in as plain text, so nothing is bold. Untick the box above to paste it with bold instead.';
@@ -967,6 +967,7 @@
     $('mail-to').value = S.emailTo.join('; ');
     $('mail-cc').value = S.emailCc.join('; ');
     $('mail-release').value = guessRelease(items);
+    mailFixes(items);
     $('mail-greeting').value = store('ccqa.greeting') || 'Team';
     $('mail-subject').value = mailDraft(items, '', '').subject;
     $('mail-body').hidden = true;
@@ -974,6 +975,15 @@
     $('mail-edit').hidden = false;
     mailRefresh();
     $('mail-dlg').showModal();
+  }
+
+  function mailFixes(items) {
+    renderMissing($('mail-fix'), items, false, function () {
+      var fresh = mail.ids.map(function (id) { return S.byId[id]; }).filter(Boolean);
+      $('mail-release').value = guessRelease(fresh);
+      mailFixes(fresh);
+      mailRefresh();
+    });
   }
 
   // An .eml file opened in Outlook becomes a new, unsent draft (X-Unsent), with CC and HTML intact.
@@ -1054,6 +1064,76 @@
     });
   }
 
+  // ------------------------------------------------------------ missing AXO details (email dialogs)
+  // When an email needs something the AXO doesn't have (category, release, handler), the dialog
+  // offers one-click choices. A click saves it on the AXO, so the next email has it too.
+
+  /** Releases already used on AXOs of this category, newest first: ["6.0", "5.4", ...]. */
+  function knownReleases(cat) {
+    var seen = {}, out = [];
+    S.items.forEach(function (i) {
+      if (i.release && (!cat || i.axoCategory === cat) && !seen[i.release]) { seen[i.release] = true; out.push(i.release); }
+    });
+    var num = function (r) { return String(r).split('.').map(function (n) { return ('000' + (parseInt(n, 10) || 0)).slice(-4); }).join('.'); };
+    return out.sort(function (a, b) { return num(b) < num(a) ? -1 : num(b) > num(a) ? 1 : 0; }).slice(0, 5);
+  }
+
+  /** What's missing on these AXOs for the email: [{ id, field, label, options }]. */
+  function missingDetails(items, needHandler) {
+    var out = [];
+    items.forEach(function (i) {
+      if (!i.axoCategory) out.push({ id: i.id, field: 'axoCategory', label: 'Category', options: S.lists.categories });
+      if (!guessRelease([i])) out.push({ id: i.id, field: 'release', label: 'Release', options: knownReleases(i.axoCategory), other: true });
+      if (needHandler && !i.handler) out.push({ id: i.id, field: 'handler', label: 'Handler', options: S.lists.handlers });
+    });
+    return out;
+  }
+
+  /** Renders the choices into box; onSaved runs after a pick is saved on the AXO. */
+  function renderMissing(box, items, needHandler, onSaved) {
+    var miss = missingDetails(items, needHandler);
+    box.hidden = !miss.length;
+    if (!miss.length) { box.innerHTML = ''; return; }
+    var multi = items.length > 1;
+    box.innerHTML = '<div class="fix-head">Missing on the AXO. Click to fill it in; it\'s saved on the AXO too.</div>' +
+      miss.map(function (m) {
+        return '<div class="fix-row"><span class="fix-label">' + esc(m.label) + (multi ? ' <span class="mono">' + esc(m.id) + '</span>' : '') + '</span>' +
+          m.options.map(function (o) {
+            return '<button type="button" class="fix-chip" data-id="' + esc(m.id) + '" data-field="' + m.field + '" data-value="' + esc(o) + '">' + esc(m.field === 'handler' ? firstName(o) : o) + '</button>';
+          }).join('') +
+          (m.other ? '<button type="button" class="fix-chip fix-other" data-id="' + esc(m.id) + '" data-field="' + m.field + '">Other…</button>' : '') +
+          '</div>';
+      }).join('');
+    box.onclick = function (e) {
+      var b = e.target.closest('.fix-chip');
+      if (!b) return;
+      var v = b.dataset.value;
+      if (b.classList.contains('fix-other')) {
+        // Typing only when the release isn't one already in use.
+        var row = b.parentNode;
+        if (row.querySelector('input')) return;
+        b.insertAdjacentHTML('afterend', '<input class="fix-input" placeholder="e.g. 6.1" spellcheck="false" aria-label="Release">' +
+          '<button type="button" class="fix-chip fix-ok">Use</button>');
+        var inp = row.querySelector('input');
+        inp.focus();
+        var go = function () { var t = inp.value.trim(); if (t) pick(b.dataset.id, b.dataset.field, t); };
+        row.querySelector('.fix-ok').onclick = go;
+        inp.onkeydown = function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); go(); } };
+        return;
+      }
+      if (b.classList.contains('fix-ok')) return;
+      pick(b.dataset.id, b.dataset.field, v);
+    };
+    function pick(id, field, value) {
+      box.querySelectorAll('button').forEach(function (x) { x.disabled = true; });
+      var p = save(id, field, value);
+      Promise.resolve(p).then(function (fresh) {
+        if (fresh) toast('Saved ' + ({ axoCategory: 'category', release: 'release', handler: 'handler' })[field] + ' ' + value + ' on AXO ' + id + '.');
+        onSaved();
+      });
+    }
+  }
+
   // ------------------------------------------------------------ reviewer's reply (review done)
   // Sent as a reply on the handler's own email, so it stays in that thread with everyone on it.
   // A link can't open a reply to a specific message (that needs the message's id, which only
@@ -1126,12 +1206,8 @@
     $('rr-title').textContent = multi ? 'Reply: ' + items.length + ' test files reviewed' : 'Reply: test file reviewed';
     if (items.some(function (i) { return i.status !== 'Review Points'; })) { toast('Reply: reviewed is only for AXOs in Review Points.', true); return; }
     $('rr-result').value = 'good';
-    reply.folder = replyFolder(items);
-    $('rr-folder').innerHTML = '<b>' + esc(reply.folder) + '</b> <span class="muted">' +
-      (/\[release\]/.test(reply.folder) ? 'No release on the AXO yet. Set its Release field, or use Edit the text.' : 'from the AXO\'s category, release and type') + '</span>';
-    var handlers = [];
-    items.forEach(function (i) { var n = firstName(i.handler); if (n && handlers.indexOf(n) < 0) handlers.push(n); });
-    $('rr-hi').value = joinNames(handlers);
+    $('rr-hi').value = '';
+    replyFromAxo();
     var reviewers = items.map(function (i) { return i.reviewer; }).filter(Boolean);
     $('rr-name').value = store('ccqa.signName') || firstName(me() || reviewers[0]);
     // The handler's email has the subject the tracker drafted: "AXO 101 - Test File for Review".
@@ -1141,6 +1217,18 @@
     $('rr-edit').hidden = false;
     replyRefresh();
     $('rr-dlg').showModal();
+  }
+
+  /** The parts of the reply that come from the AXOs: folder, handler's name, missing-detail choices. */
+  function replyFromAxo() {
+    var items = reply.ids.map(function (id) { return S.byId[id]; }).filter(Boolean);
+    reply.folder = replyFolder(items);
+    $('rr-folder').innerHTML = '<b>' + esc(reply.folder) + '</b> <span class="muted">' +
+      (/\[release\]/.test(reply.folder) ? 'Pick the release below.' : 'from the AXO\'s category, release and type') + '</span>';
+    var handlers = [];
+    items.forEach(function (i) { var n = firstName(i.handler); if (n && handlers.indexOf(n) < 0) handlers.push(n); });
+    if (!$('rr-hi').value.trim()) $('rr-hi').value = joinNames(handlers);
+    renderMissing($('rr-fix'), items, true, function () { replyFromAxo(); replyRefresh(); });
   }
 
   /** Copies the reply with its bold text, like copyMail(). */

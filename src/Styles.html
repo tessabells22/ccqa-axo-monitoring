@@ -338,6 +338,16 @@ dialog.dlg-wide .dlg-foot{flex-wrap:wrap}
 .mail-auto .muted{font-size:12.5px}
 .rr-folder{font:400 14px/1.3 var(--body);letter-spacing:0;text-transform:none;color:var(--fg);padding:9px 0 12px}
 .rr-folder .muted{font-size:12.5px}
+.fix-box{margin:2px 0 12px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--orange) 45%,transparent);background:color-mix(in srgb,var(--orange) 9%,transparent);border-radius:8px;display:flex;flex-direction:column;gap:7px}
+.fix-box[hidden]{display:none}
+.fix-head{font-size:12.5px;color:var(--warn);font-weight:600}
+.fix-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.fix-label{font-size:12.5px;color:var(--muted);min-width:64px;font-weight:600}
+.fix-chip{border:1px solid var(--line-strong);background:var(--surface);color:var(--fg);border-radius:999px;padding:4px 11px;font:500 12.5px/1.2 var(--body);cursor:pointer}
+.fix-chip:hover{border-color:var(--brand);color:var(--brand)}
+.fix-chip:disabled{opacity:.5;cursor:wait}
+.fix-other{color:var(--muted);border-style:dashed}
+.fix-input{width:90px;padding:4px 8px;font:400 12.5px/1.2 var(--body);border:1px solid var(--line-strong);border-radius:6px;background:var(--surface);color:var(--fg)}
 .rr-steps{margin:12px 0 0;padding-left:20px;font-size:13.5px;line-height:1.55;color:var(--fg)}
 .rr-steps .linkish{padding:0 0 0 4px;font-size:12.5px}
 .rr-steps .muted{font-size:12.5px}
