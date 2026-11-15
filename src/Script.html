@@ -531,6 +531,7 @@
       renderKpis(); renderBreakdown(); renderWorkload();
       if (S.openId === id) fillDrawerFields(item, field);
       if (S.openId === id) loadDetail(id);
+      refreshEmailDialogs(id);
       return fresh;
     }).catch(function (e) {
       busy(-1);
@@ -1089,6 +1090,20 @@
     return out;
   }
 
+  /**
+   * After any change to an AXO is saved (from the email dialog's buttons, the panel, or after
+   * the "who's making this change?" prompt), an open email dialog for that AXO picks it up.
+   */
+  function refreshEmailDialogs(id) {
+    if ($('rr-dlg').open && reply.ids.indexOf(id) >= 0) { replyFromAxo(); replyRefresh(); }
+    if ($('mail-dlg').open && mail.ids.indexOf(id) >= 0) {
+      var items = mail.ids.map(function (x) { return S.byId[x]; }).filter(Boolean);
+      $('mail-release').value = guessRelease(items);
+      mailFixes(items);
+      mailRefresh();
+    }
+  }
+
   /** Renders the choices into box; onSaved runs after a pick is saved on the AXO. */
   function renderMissing(box, items, needHandler, onSaved) {
     var miss = missingDetails(items, needHandler);
@@ -1127,9 +1142,11 @@
     function pick(id, field, value) {
       box.querySelectorAll('button').forEach(function (x) { x.disabled = true; });
       var p = save(id, field, value);
+      // The dialog refreshes itself once the save lands (refreshEmailDialogs); this only
+      // re-enables the buttons when nothing was saved (failed, or waiting for the name prompt).
       Promise.resolve(p).then(function (fresh) {
         if (fresh) toast('Saved ' + ({ axoCategory: 'category', release: 'release', handler: 'handler' })[field] + ' ' + value + ' on AXO ' + id + '.');
-        onSaved();
+        else onSaved();
       });
     }
   }
